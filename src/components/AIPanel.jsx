@@ -1,15 +1,17 @@
 import { useState, useRef } from 'react'
 import { streamAI } from '../api.js'
-
-const TABS = [
-  { key: 'plan',    label: '📋 Generate Plan' },
-  { key: 'standup', label: '📣 Standup' },
-  { key: 'risks',   label: '⚠️ Risks' },
-  { key: 'report',  label: '📊 Weekly Report' },
-  { key: 'notes',   label: '📝 Parse Notes' },
-]
+import { useLang } from '../i18n.js'
 
 export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
+  const { t } = useLang()
+  const TABS = [
+    { key: 'plan',    label: t.tabPlan },
+    { key: 'standup', label: t.tabStandup },
+    { key: 'risks',   label: t.tabRisks },
+    { key: 'report',  label: t.tabReport },
+    { key: 'notes',   label: t.tabNotes },
+  ]
+
   const [tab, setTab] = useState('plan')
   const [output, setOutput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -36,7 +38,6 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
       },
       () => {
         setStreaming(false)
-        // Try to parse JSON for plan/notes tabs
         if (tab === 'plan' || tab === 'notes') {
           try {
             const match = full.match(/\[[\s\S]*\]/)
@@ -78,40 +79,40 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
     await onApplyTasks(parsedTasks)
     setApplying(false)
     setParsedTasks(null)
-    setOutput(prev => prev + '\n\n✅ Applied ' + parsedTasks.length + ' tasks to the board.')
+    setOutput(prev => prev + t.appliedMsg(parsedTasks.length))
   }
+
+  const placeholder = { plan: t.phPlan, standup: t.phStandup, risks: t.phRisks, report: t.phReport, notes: t.phNotes }
 
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-lg" style={{ height: '80vh' }}>
         <div className="modal-header">
-          <h3>✨ AI Assistant — {project.name}</h3>
+          <h3>{t.aiPanelTitle(project.name)}</h3>
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
 
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 0 }}>
-          {/* Tabs */}
           <div className="ai-tabs">
-            {TABS.map(t => (
+            {TABS.map(tb => (
               <button
-                key={t.key}
-                className={`ai-tab ${tab === t.key ? 'active' : ''}`}
-                onClick={() => { setTab(t.key); setOutput(''); setParsedTasks(null) }}
+                key={tb.key}
+                className={`ai-tab ${tab === tb.key ? 'active' : ''}`}
+                onClick={() => { setTab(tb.key); setOutput(''); setParsedTasks(null) }}
               >
-                {t.label}
+                {tb.label}
               </button>
             ))}
           </div>
 
-          {/* Tab-specific inputs */}
           {tab === 'plan' && (
             <div className="form-row">
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Team Size</label>
-                <input value={planOpts.teamSize} onChange={e => setPlanOpts(o => ({ ...o, teamSize: e.target.value }))} placeholder="e.g. 3 engineers" />
+                <label>{t.teamSizeLabel}</label>
+                <input value={planOpts.teamSize} onChange={e => setPlanOpts(o => ({ ...o, teamSize: e.target.value }))} placeholder={t.teamSizePlaceholder} />
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Due Date</label>
+                <label>{t.dueDateLabel2}</label>
                 <input type="date" value={planOpts.dueDate} onChange={e => setPlanOpts(o => ({ ...o, dueDate: e.target.value }))} />
               </div>
             </div>
@@ -119,11 +120,11 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
 
           {tab === 'notes' && (
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Paste Meeting Notes</label>
+              <label>{t.pasteNotesLabel}</label>
               <textarea
                 value={notesText}
                 onChange={e => setNotesText(e.target.value)}
-                placeholder="Paste your meeting notes here. AI will extract all action items as tasks."
+                placeholder={t.notesPastePlaceholder}
                 rows={5}
                 style={{ minHeight: 100 }}
               />
@@ -132,56 +133,60 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
 
           {tab === 'standup' && (
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Generates a standup based on current task status ({tasks.filter(t => t.status === 'done').length} done, {tasks.filter(t => t.status === 'in_progress').length} in progress, {tasks.filter(t => t.status === 'blocked').length} blocked).
+              {t.standupInfo(
+                tasks.filter(t2 => t2.status === 'done').length,
+                tasks.filter(t2 => t2.status === 'in_progress').length,
+                tasks.filter(t2 => t2.status === 'blocked').length
+              )}
             </div>
           )}
 
           {tab === 'risks' && (
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Analyzes {tasks.filter(t => t.status === 'blocked').length} blocked and {tasks.filter(t => {
-                const today = new Date().toISOString().split('T')[0]
-                return t.dueDate && t.dueDate < today && t.status !== 'done'
-              }).length} overdue tasks to identify risks.
+              {t.risksInfo(
+                tasks.filter(t2 => t2.status === 'blocked').length,
+                tasks.filter(t2 => {
+                  const today = new Date().toISOString().split('T')[0]
+                  return t2.dueDate && t2.dueDate < today && t2.status !== 'done'
+                }).length
+              )}
             </div>
           )}
 
-          {/* Run button */}
           <button className="btn btn-ai" onClick={handleRun} disabled={streaming}>
-            {streaming ? '⏳ Thinking…' : '▶ Run'}
+            {streaming ? t.thinking : t.run}
           </button>
 
-          {/* Output */}
           <div className={`ai-output ${!output ? 'empty' : ''}`} style={{ flex: 1, minHeight: 120 }}>
             {!output && !streaming
-              ? getPlaceholder(tab)
+              ? placeholder[tab]
               : <OutputText text={output} streaming={streaming} />
             }
           </div>
 
-          {/* Parsed tasks preview */}
           {parsedTasks && (
             <div className="task-preview">
               <div className="flex items-center gap-8" style={{ marginBottom: 8 }}>
-                <strong style={{ fontSize: 13 }}>✅ {parsedTasks.length} tasks ready to apply</strong>
+                <strong style={{ fontSize: 13 }}>{t.tasksReady(parsedTasks.length)}</strong>
                 <button className="btn btn-primary btn-sm ml-auto" onClick={handleApply} disabled={applying}>
-                  {applying ? 'Applying…' : 'Apply to Board'}
+                  {applying ? t.applying : t.applyToBoard}
                 </button>
               </div>
-              {parsedTasks.slice(0, 5).map((t, i) => (
+              {parsedTasks.slice(0, 5).map((tk, i) => (
                 <div key={i} className="task-preview-item">
-                  <span className={`badge badge-${t.priority}`}>{t.priority}</span>
-                  <span>{t.title}</span>
-                  {t.estimatedHours && <span className="text-muted text-sm ml-auto">{t.estimatedHours}h</span>}
+                  <span className={`badge badge-${tk.priority}`}>{tk.priority}</span>
+                  <span>{tk.title}</span>
+                  {tk.estimatedHours && <span className="text-muted text-sm ml-auto">{tk.estimatedHours}h</span>}
                 </div>
               ))}
-              {parsedTasks.length > 5 && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>+{parsedTasks.length - 5} more</div>}
+              {parsedTasks.length > 5 && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.more(parsedTasks.length - 5)}</div>}
             </div>
           )}
         </div>
 
         <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
-          <span className="ai-hint">Powered by Groq · Cerebras · NVIDIA · OpenRouter</span>
-          <button className="btn" onClick={onClose}>Close</button>
+          <span className="ai-hint">{t.poweredBy}</span>
+          <button className="btn" onClick={onClose}>{t.close}</button>
         </div>
       </div>
     </div>
@@ -189,7 +194,6 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
 }
 
 function OutputText({ text, streaming }) {
-  // Render **bold** markdown simply
   const parts = text.split(/(\*\*[^*]+\*\*)/g)
   return (
     <span>
@@ -201,15 +205,4 @@ function OutputText({ text, streaming }) {
       {streaming && <span className="ai-streaming"> ▌</span>}
     </span>
   )
-}
-
-function getPlaceholder(tab) {
-  const hints = {
-    plan:    'AI will generate a full task breakdown for this project. Adjust team size and due date for better results.',
-    standup: 'AI will write a daily standup based on your current task status.',
-    risks:   'AI will analyze your blocked and overdue tasks to surface risks and recommend actions.',
-    report:  'AI will generate a professional weekly status report for this project.',
-    notes:   'Paste meeting notes above and AI will extract all action items as tasks.',
-  }
-  return hints[tab] || 'Run AI to generate output.'
 }

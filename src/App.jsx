@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from './api.js'
+import { LangContext, T } from './i18n.js'
 import Sidebar from './components/Sidebar.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import ProjectDetail from './components/ProjectDetail.jsx'
 import ProjectForm from './components/ProjectForm.jsx'
 
 export default function App() {
+  const [lang, setLang] = useState(() => localStorage.getItem('lang') || 'en')
   const [view, setView] = useState('dashboard')
   const [projects, setProjects] = useState([])
   const [tasks, setTasks] = useState([])
@@ -14,6 +16,9 @@ export default function App() {
   const [showProjectForm, setShowProjectForm] = useState(false)
   const [editingProject, setEditingProject] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  const switchLang = (l) => { setLang(l); localStorage.setItem('lang', l) }
+  const t = T[lang]
 
   const loadData = useCallback(async () => {
     const [ps, ts, st] = await Promise.all([api.getProjects(), api.getTasks(''), api.getDashboard()])
@@ -42,7 +47,7 @@ export default function App() {
   }
 
   const handleDeleteProject = async (id) => {
-    if (!confirm('Delete this project and all its tasks?')) return
+    if (!confirm(t.deleteConfirm)) return
     await api.deleteProject(id)
     setProjects(prev => prev.filter(x => x.id !== id))
     setTasks(prev => prev.filter(t => t.projectId !== id))
@@ -81,9 +86,10 @@ export default function App() {
   const selectedProject = projects.find(p => p.id === selectedId)
   const projectTasks = tasks.filter(t => t.projectId === selectedId)
 
-  if (loading) return <div className="loading">Loading...</div>
+  if (loading) return <div className="loading">{T[lang].loading}</div>
 
   return (
+    <LangContext.Provider value={{ lang, setLang: switchLang, t }}>
     <div className="app">
       <Sidebar
         projects={projects}
@@ -132,5 +138,6 @@ export default function App() {
         />
       )}
     </div>
+    </LangContext.Provider>
   )
 }

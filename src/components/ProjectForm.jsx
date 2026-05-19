@@ -1,14 +1,16 @@
 import { useState } from 'react'
+import { useLang } from '../i18n.js'
 
 export default function ProjectForm({ project, onSave, onClose }) {
+  const { t } = useLang()
   const [form, setForm] = useState({
-    name: project?.name || '',
+    name:        project?.name        || '',
     description: project?.description || '',
-    goal: project?.goal || '',
-    status: project?.status || 'active',
-    priority: project?.priority || 'medium',
-    startDate: project?.startDate || '',
-    dueDate: project?.dueDate || '',
+    goal:        project?.goal        || '',
+    status:      project?.status      || 'active',
+    priority:    project?.priority    || 'medium',
+    startDate:   project?.startDate   || '',
+    dueDate:     project?.dueDate     || '',
   })
   const [saving, setSaving] = useState(false)
 
@@ -26,58 +28,58 @@ export default function ProjectForm({ project, onSave, onClose }) {
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-header">
-          <h3>{project ? 'Edit Project' : 'New Project'}</h3>
+          <h3>{project ? t.editProject : t.newProjectTitle}</h3>
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
             <div className="form-group">
-              <label>Project Name *</label>
-              <input value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Mobile App Redesign" autoFocus required />
+              <label>{t.projectNameLabel}</label>
+              <input value={form.name} onChange={e => set('name', e.target.value)} placeholder={t.projectNamePlaceholder} autoFocus required />
             </div>
             <div className="form-group">
-              <label>Goal</label>
-              <input value={form.goal} onChange={e => set('goal', e.target.value)} placeholder="What does success look like?" />
+              <label>{t.goalLabel}</label>
+              <input value={form.goal} onChange={e => set('goal', e.target.value)} placeholder={t.goalPlaceholder} />
             </div>
             <div className="form-group">
-              <label>Description</label>
-              <textarea value={form.description} onChange={e => set('description', e.target.value)} placeholder="Brief description of the project..." rows={3} />
+              <label>{t.descriptionLabel}</label>
+              <textarea value={form.description} onChange={e => set('description', e.target.value)} placeholder={t.descPlaceholder} rows={3} />
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>Status</label>
+                <label>{t.statusLabel}</label>
                 <select value={form.status} onChange={e => set('status', e.target.value)}>
-                  <option value="active">Active</option>
-                  <option value="paused">Paused</option>
-                  <option value="completed">Completed</option>
-                  <option value="archived">Archived</option>
+                  <option value="active">{t.statusActive}</option>
+                  <option value="paused">{t.statusPaused}</option>
+                  <option value="completed">{t.statusCompleted}</option>
+                  <option value="archived">{t.statusArchived}</option>
                 </select>
               </div>
               <div className="form-group">
-                <label>Priority</label>
+                <label>{t.priorityLabel}</label>
                 <select value={form.priority} onChange={e => set('priority', e.target.value)}>
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                  <option value="urgent">Urgent</option>
+                  <option value="low">{t.priorityLow}</option>
+                  <option value="medium">{t.priorityMedium}</option>
+                  <option value="high">{t.priorityHigh}</option>
+                  <option value="urgent">{t.priorityUrgent}</option>
                 </select>
               </div>
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>Start Date</label>
+                <label>{t.startDateLabel}</label>
                 <input type="date" value={form.startDate} onChange={e => set('startDate', e.target.value)} />
               </div>
               <div className="form-group">
-                <label>Due Date</label>
+                <label>{t.dueDateLabel}</label>
                 <input type="date" value={form.dueDate} onChange={e => set('dueDate', e.target.value)} />
               </div>
             </div>
           </div>
           <div className="modal-footer">
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn" onClick={onClose}>{t.cancel}</button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Saving…' : project ? 'Save Changes' : 'Create Project'}
+              {saving ? t.saving : project ? t.saveChanges : t.createProject}
             </button>
           </div>
         </form>
