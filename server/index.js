@@ -520,10 +520,13 @@ app.get('/api/status', (req, res) => {
 })
 
 // ── Frontend (production) ─────────────────────────────────────────────────────
+// Served under /pm so proxy route { prefix: '/pm', target: 3004 } (no strip) works.
+// Direct access: http://host:3004/ redirects to /pm
 if (process.env.NODE_ENV === 'production') {
   const distDir = path.join(__dirname, '../dist')
-  app.use(express.static(distDir))
-  app.get('*', (req, res) => res.sendFile(path.join(distDir, 'index.html')))
+  app.get('/', (req, res) => res.redirect('/pm'))
+  app.use('/pm', express.static(distDir))
+  app.get('/pm*', (req, res) => res.sendFile(path.join(distDir, 'index.html')))
 }
 
 const PORT = process.env.PORT || 3004
