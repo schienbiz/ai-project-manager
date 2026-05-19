@@ -53,7 +53,7 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
 
   const handleRun = () => {
     if (tab === 'plan') {
-      run('/api/ai/generate-plan', {
+      run('/pm/api/ai/generate-plan', {
         projectName: project.name,
         description: project.description,
         goal: project.goal,
@@ -61,14 +61,14 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
         teamSize: planOpts.teamSize,
       })
     } else if (tab === 'standup') {
-      run('/api/ai/standup', { project, tasks })
+      run('/pm/api/ai/standup', { project, tasks })
     } else if (tab === 'risks') {
-      run('/api/ai/risks', { project, tasks })
+      run('/pm/api/ai/risks', { project, tasks })
     } else if (tab === 'report') {
-      run('/api/ai/weekly-report', { projects: [project], tasks })
+      run('/pm/api/ai/weekly-report', { projects: [project], tasks })
     } else if (tab === 'notes') {
       if (!notesText.trim()) return
-      run('/api/ai/parse-notes', { content: notesText, projectName: project.name })
+      run('/pm/api/ai/parse-notes', { content: notesText, projectName: project.name })
     }
   }
 

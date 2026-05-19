@@ -102,13 +102,12 @@ async function tryProvider(p, messages, maxTokens) {
 }
 
 const MULTI_MAX_MS = 13_000
-const DRAFT_MAX_TOKENS = 600
 
 async function multiGenerate(messages, maxTokens = 2048) {
   const successes = []
   const tasks = PROVIDERS
     .filter(p => p.key)
-    .map(p => tryProvider(p, messages, DRAFT_MAX_TOKENS).then(result => {
+    .map(p => tryProvider(p, messages, maxTokens).then(result => {
       if (result) successes.push(result)
       return result
     }))
