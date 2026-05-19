@@ -28,6 +28,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
 
 // ── AI Providers ──────────────────────────────────────────────────────────────
+// Only Groq + Cerebras — NVIDIA and OpenRouter share rate limits with other
+// apps on the same account and are too unreliable for AI PM.
 const PROVIDERS = [
   {
     name: 'Groq',
@@ -43,22 +45,6 @@ const PROVIDERS = [
     baseURL: 'https://api.cerebras.ai/v1',
     model: 'gpt-oss-120b',
     timeout: 12_000,
-    fetch: customFetch,
-  },
-  {
-    name: 'NVIDIA',
-    key: process.env.NVIDIA_API_KEY,
-    baseURL: 'https://integrate.api.nvidia.com/v1',
-    model: 'meta/llama-3.3-70b-instruct',
-    timeout: 20_000,
-    fetch: customFetch,
-  },
-  {
-    name: 'OpenRouter',
-    key: process.env.OPENROUTER_API_KEY,
-    baseURL: 'https://openrouter.ai/api/v1',
-    model: 'deepseek/deepseek-v4-flash:free',
-    timeout: 25_000,
     fetch: customFetch,
   },
 ]

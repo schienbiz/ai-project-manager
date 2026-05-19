@@ -117,7 +117,7 @@ export const T = {
     applyToBoard:   'Apply to Board',
     applying:       'Applying…',
     more:           (n) => `+${n} more`,
-    poweredBy:      'Powered by Groq · Cerebras · NVIDIA · OpenRouter',
+    poweredBy:      'Powered by Groq · Cerebras',
     close:          'Close',
     appliedMsg:     (n) => `\n\n✅ Applied ${n} tasks to the board.`,
 
@@ -249,7 +249,7 @@ export const T = {
     applyToBoard:   '套用到看板',
     applying:       '套用中…',
     more:           (n) => `+${n} 更多`,
-    poweredBy:      '由 Groq · Cerebras · NVIDIA · OpenRouter 提供支援',
+    poweredBy:      '由 Groq · Cerebras 提供支援',
     close:          '關閉',
     appliedMsg:     (n) => `\n\n✅ 已成功套用 ${n} 個任務到看板。`,
 
