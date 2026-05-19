@@ -128,6 +128,13 @@ export const T = {
     phNotes:   'Paste meeting notes above and AI will extract all action items as tasks.',
     teamSizePlaceholder:  'e.g. 3 engineers',
     notesPastePlaceholder:'Paste your meeting notes here. AI will extract all action items as tasks.',
+
+    // Notes section
+    notesTitle:       'Notes',
+    notesPlaceholder: 'Write a note… (Shift+Enter for new line, Enter to save)',
+    notesEmpty:       'No notes yet. Write something.',
+    noteSave:         'Save',
+    noteDelete:       'Delete',
   },
 
   zh: {
@@ -253,5 +260,12 @@ export const T = {
     phNotes:   '請在上方貼上會議記錄，AI 將提取所有行動項目並轉為任務。',
     teamSizePlaceholder:  '例如：3 位工程師',
     notesPastePlaceholder:'請在此貼上會議記錄，AI 將提取所有行動項目並轉為任務。',
+
+    // Notes section
+    notesTitle:       '筆記',
+    notesPlaceholder: '記錄筆記… (Shift+Enter 換行，Enter 儲存)',
+    notesEmpty:       '尚無筆記，立即記錄第一筆。',
+    noteSave:         '儲存',
+    noteDelete:       '刪除',
   },
 }

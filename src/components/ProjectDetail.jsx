@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import AIPanel from './AIPanel.jsx'
 import TaskForm from './TaskForm.jsx'
 import { useLang } from '../i18n.js'
@@ -18,8 +18,9 @@ function dueCls(dueDate, status) {
 }
 
 export default function ProjectDetail({
-  project, tasks, onUpdateProject, onDeleteProject, onEditProject,
-  onCreateTask, onUpdateTask, onDeleteTask, onBulkCreateTasks
+  project, tasks, notes = [], onUpdateProject, onDeleteProject, onEditProject,
+  onCreateTask, onUpdateTask, onDeleteTask, onBulkCreateTasks,
+  onCreateNote, onDeleteNote,
 }) {
   const { t } = useLang()
   const [showAI, setShowAI] = useState(false)
@@ -106,6 +107,8 @@ export default function ProjectDetail({
         })}
       </div>
 
+      <NotesSection notes={notes} onCreateNote={onCreateNote} onDeleteNote={onDeleteNote} />
+
       {taskForm && (
         <TaskForm
           task={taskForm.task}
@@ -131,6 +134,77 @@ export default function ProjectDetail({
           onApplyTasks={onBulkCreateTasks}
         />
       )}
+    </div>
+  )
+}
+
+function NotesSection({ notes, onCreateNote, onDeleteNote }) {
+  const { t } = useLang()
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+  const taRef = useRef(null)
+
+  const save = async () => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setSaving(true)
+    await onCreateNote(trimmed)
+    setText('')
+    setSaving(false)
+    taRef.current?.focus()
+  }
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save() }
+  }
+
+  return (
+    <div className="notes-section">
+      <div className="notes-header">
+        <span className="section-title" style={{ margin: 0 }}>{t.notesTitle}</span>
+        <span className="text-muted text-sm">{notes.length}</span>
+      </div>
+
+      <div className="notes-compose">
+        <textarea
+          ref={taRef}
+          className="notes-textarea"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder={t.notesPlaceholder}
+          rows={3}
+        />
+        <button className="btn btn-primary btn-sm notes-save" onClick={save} disabled={saving || !text.trim()}>
+          {t.noteSave}
+        </button>
+      </div>
+
+      {notes.length === 0 ? (
+        <div className="notes-empty">{t.notesEmpty}</div>
+      ) : (
+        <div className="notes-list">
+          {notes.map(note => (
+            <NoteCard key={note.id} note={note} onDelete={() => onDeleteNote(note.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NoteCard({ note, onDelete }) {
+  const { t } = useLang()
+  const dt = new Date(note.createdAt).toLocaleString(t.dateLocale, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+  return (
+    <div className="note-card">
+      <div className="note-meta">
+        <span className="note-date">{dt}</span>
+        <button className="btn btn-sm btn-danger note-del" onClick={onDelete}>×</button>
+      </div>
+      <div className="note-content">{note.content}</div>
     </div>
   )
 }

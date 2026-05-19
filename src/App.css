@@ -227,3 +227,18 @@ body {
 .dot-paused    { background: var(--muted); }
 .dot-completed { background: var(--accent); }
 .dot-archived  { background: var(--border); }
+
+/* ── Notes section ── */
+.notes-section { padding: 20px; border-top: 1px solid var(--border); margin-top: 4px; }
+.notes-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.notes-compose { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 16px; }
+.notes-textarea { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; padding: 10px 12px; resize: vertical; min-height: 72px; line-height: 1.5; transition: border-color .15s; font-family: inherit; }
+.notes-textarea:focus { outline: none; border-color: var(--accent); }
+.notes-save { align-self: flex-end; white-space: nowrap; }
+.notes-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+.notes-list { display: flex; flex-direction: column; gap: 10px; }
+.note-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.note-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.note-date { font-size: 11px; color: var(--muted); }
+.note-del { padding: 2px 7px; font-size: 13px; line-height: 1; }
+.note-content { font-size: 13px; color: var(--text); white-space: pre-wrap; line-height: 1.55; word-break: break-word; }

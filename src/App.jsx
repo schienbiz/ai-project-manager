@@ -16,6 +16,7 @@ export default function App() {
   const [showProjectForm, setShowProjectForm] = useState(false)
   const [editingProject, setEditingProject] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [notes, setNotes] = useState([])
 
   const switchLang = (l) => { setLang(l); localStorage.setItem('lang', l) }
   const t = T[lang]
@@ -29,6 +30,10 @@ export default function App() {
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
+
+  useEffect(() => {
+    if (selectedId) api.getNotes(selectedId).then(setNotes)
+  }, [selectedId])
 
   const selectProject = (id) => { setSelectedId(id); setView('project') }
 
@@ -71,6 +76,17 @@ export default function App() {
   const handleDeleteTask = async (id) => {
     await api.deleteTask(id)
     setTasks(prev => prev.filter(x => x.id !== id))
+  }
+
+  const handleCreateNote = async (content) => {
+    const n = await api.createNote({ projectId: selectedId, content })
+    setNotes(prev => [n, ...prev])
+    return n
+  }
+
+  const handleDeleteNote = async (id) => {
+    await api.deleteNote(id)
+    setNotes(prev => prev.filter(n => n.id !== id))
   }
 
   const handleBulkCreateTasks = async (tasksData, projectId) => {
@@ -116,6 +132,7 @@ export default function App() {
             project={selectedProject}
             tasks={projectTasks}
             allTasks={tasks}
+            notes={notes}
             onUpdateProject={(data) => handleUpdateProject(selectedProject.id, data)}
             onDeleteProject={() => handleDeleteProject(selectedProject.id)}
             onEditProject={() => setEditingProject(selectedProject)}
@@ -123,6 +140,8 @@ export default function App() {
             onUpdateTask={handleUpdateTask}
             onDeleteTask={handleDeleteTask}
             onBulkCreateTasks={(ts) => handleBulkCreateTasks(ts, selectedProject.id)}
+            onCreateNote={handleCreateNote}
+            onDeleteNote={handleDeleteNote}
           />
         )}
       </div>
