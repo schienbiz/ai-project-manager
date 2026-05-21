@@ -407,11 +407,14 @@ async function runAgentBackground(taskId, projectId, lang) {
       writeJSON(TASKS_FILE, tList)
     }
     console.log(`[agent-bg] ${type} done — "${task.title}"`)
+    const typeEmoji = { research: '🔍', write: '✍️', plan: '🗺️' }[type] || '🤖'
+    sendTelegram(`🤖 *AI Agent完成*\n\n${typeEmoji} *${task.title}*\n📁 ${project.name}\n\n輸出已就緒，點擊🤖查看並核准。`).catch(() => {})
   } catch (err) {
     console.error('[agent-bg] error:', err.message)
     const tList = readJSON(TASKS_FILE, [])
     const idx   = tList.findIndex(t => t.id === taskId)
     if (idx !== -1) { tList[idx] = { ...tList[idx], agentStatus: 'error', updatedAt: now() }; writeJSON(TASKS_FILE, tList) }
+    sendTelegram(`⚠️ *AI Agent錯誤*\n\n*${task?.title || taskId}*\n${err.message}`).catch(() => {})
   }
 }
 
@@ -852,6 +855,19 @@ app.post('/api/ai/agent-run', async (req, res) => {
 })
 
 // ── Morning digest ────────────────────────────────────────────────────────────
+async function sendTelegram(text) {
+  const botToken = process.env.BOT_TOKEN
+  const chatId   = process.env.OWNER_TELEGRAM_ID
+  if (!botToken || !chatId) return
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
+    })
+  } catch (err) { console.error('[telegram] send error:', err.message) }
+}
+
 let _lastDigestAt = null
 
 async function sendMorningDigest() {
@@ -911,14 +927,9 @@ Rules:
   const dateStr = new Date().toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'long', day: 'numeric', weekday: 'short' })
   const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}`
 
-  const r = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
-  })
-  const result = await r.json()
-  if (result.ok) { _lastDigestAt = new Date().toISOString(); console.log(`[digest] sent — ${projects.length} projects`) }
-  else console.error('[digest] Telegram error:', result.description)
+  await sendTelegram(msg)
+  _lastDigestAt = new Date().toISOString()
+  console.log(`[digest] sent — ${projects.length} projects`)
 }
 
 function scheduleNextDigest() {
