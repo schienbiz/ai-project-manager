@@ -302,3 +302,5 @@ body {
 .agent-badge { font-size: 11px; padding: 1px 5px; border-radius: 4px; flex-shrink: 0; cursor: default; }
 .agent-badge-approved { background: rgba(63,185,80,.18); color: #3fb950; }
 .agent-badge-saved    { background: rgba(88,166,255,.15); color: #58a6ff; }
+.agent-badge-running  { background: rgba(251,191,36,.18); color: #f59e0b; animation: agent-pulse 1.2s ease infinite; }
+.agent-badge-error    { background: rgba(248,81,73,.18);  color: #f85149; }

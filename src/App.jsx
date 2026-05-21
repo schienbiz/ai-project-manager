@@ -35,6 +35,17 @@ export default function App() {
     if (selectedId) api.getNotes(selectedId).then(setNotes)
   }, [selectedId])
 
+  // Poll every 3s while any task has an agent running in the background
+  const hasRunningAgents = tasks.some(t => t.agentStatus === 'running')
+  useEffect(() => {
+    if (!hasRunningAgents) return
+    const id = setInterval(async () => {
+      const ts = await api.getTasks('')
+      setTasks(ts)
+    }, 3000)
+    return () => clearInterval(id)
+  }, [hasRunningAgents])
+
   const selectProject = (id) => { setSelectedId(id); setView('project') }
 
   const handleCreateProject = async (data) => {

@@ -374,13 +374,67 @@ app.put('/api/tasks/bulk', (req, res) => {
   res.json({ ok: true })
 })
 
+// Background agent: same logic as /agent-run but collects output → writes to JSON
+async function runAgentBackground(taskId, projectId, lang) {
+  try {
+    const task    = readJSON(TASKS_FILE, []).find(t => t.id === taskId)
+    const project = readJSON(PROJECTS_FILE, []).find(p => p.id === projectId)
+    if (!task || !project) return
+
+    const projectTasks = readJSON(TASKS_FILE, []).filter(t => t.projectId === projectId)
+    const type = await classifyTask(task.title, task.description)
+
+    let output = ''
+    const fakeRes = {
+      write(data) {
+        const m = data.match(/^data: (.*)\n\n$/)
+        if (!m) return
+        try {
+          const p = JSON.parse(m[1])
+          if (p.type === 'output') output += p.text
+        } catch {}
+      }
+    }
+
+    if      (type === 'research') await runResearcher(task, project, lang, fakeRes)
+    else if (type === 'plan')     await runPlanner(task, project, lang, fakeRes)
+    else                          await runWriter(task, project, projectTasks, lang, fakeRes)
+
+    const tList = readJSON(TASKS_FILE, [])
+    const idx   = tList.findIndex(t => t.id === taskId)
+    if (idx !== -1) {
+      tList[idx] = { ...tList[idx], agentType: type, agentOutput: output, agentStatus: 'done', updatedAt: now() }
+      writeJSON(TASKS_FILE, tList)
+    }
+    console.log(`[agent-bg] ${type} done — "${task.title}"`)
+  } catch (err) {
+    console.error('[agent-bg] error:', err.message)
+    const tList = readJSON(TASKS_FILE, [])
+    const idx   = tList.findIndex(t => t.id === taskId)
+    if (idx !== -1) { tList[idx] = { ...tList[idx], agentStatus: 'error', updatedAt: now() }; writeJSON(TASKS_FILE, tList) }
+  }
+}
+
 app.put('/api/tasks/:id', (req, res) => {
+  const { _lang, ...body } = req.body
   const list = readJSON(TASKS_FILE, [])
   const idx = list.findIndex(t => t.id === req.params.id)
   if (idx === -1) return res.status(404).json({ error: 'Not found' })
-  list[idx] = { ...list[idx], ...req.body, id: req.params.id, updatedAt: now() }
+  const prev = list[idx]
+  list[idx] = { ...prev, ...body, id: req.params.id, updatedAt: now() }
+
+  // Auto-trigger when task first enters in_progress and no agent has run before
+  const trigger = body.status === 'in_progress' && prev.status !== 'in_progress' && !prev.agentStatus
+  if (trigger) list[idx].agentStatus = 'running'
+
   writeJSON(TASKS_FILE, list)
   res.json(list[idx])
+
+  if (trigger) {
+    runAgentBackground(req.params.id, list[idx].projectId, _lang || 'en').catch(err =>
+      console.error('[agent-bg] unhandled:', err.message)
+    )
+  }
 })
 
 app.delete('/api/tasks/:id', (req, res) => {

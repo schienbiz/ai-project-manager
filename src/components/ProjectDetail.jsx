@@ -24,7 +24,7 @@ export default function ProjectDetail({
   onCreateTask, onUpdateTask, onDeleteTask, onBulkCreateTasks,
   onCreateNote, onDeleteNote,
 }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const STATUS_LABEL = { active: t.statusActive, paused: t.statusPaused, completed: t.statusCompleted, archived: t.statusArchived }
   const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const [showAI, setShowAI] = useState(false)
@@ -48,7 +48,7 @@ export default function ProjectDetail({
   const handleDrop = (colKey) => {
     if (!draggingId || dragOver === null) return
     const task = tasks.find(t2 => t2.id === draggingId)
-    if (task && task.status !== colKey) onUpdateTask(draggingId, { status: colKey })
+    if (task && task.status !== colKey) onUpdateTask(draggingId, { status: colKey, _lang: lang })
     setDraggingId(null)
     setDragOver(null)
   }
@@ -100,8 +100,8 @@ export default function ProjectDetail({
                     onDragStart={() => setDraggingId(task.id)}
                     onEdit={() => setTaskForm({ status: task.status, task })}
                     onDelete={() => onDeleteTask(task.id)}
-                    onStatusChange={(status) => onUpdateTask(task.id, { status })}
-                    onQuickDone={() => onUpdateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done' })}
+                    onStatusChange={(status) => onUpdateTask(task.id, { status, _lang: lang })}
+                    onQuickDone={() => onUpdateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done', _lang: lang })}
                     onRunAgent={() => setAgentTask(task)}
                   />
                 ))}
@@ -242,7 +242,11 @@ function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone
     ? { icon: '🤖✓', cls: 'agent-badge-approved', title: t.agentApprovedLabel }
     : task.agentStatus === 'saved'
       ? { icon: '🤖', cls: 'agent-badge-saved', title: t.agentSavedLabel }
-      : null
+      : task.agentStatus === 'running'
+        ? { icon: '⏳', cls: 'agent-badge-running', title: t.agentRunningLabel }
+        : task.agentStatus === 'error'
+          ? { icon: '⚠️', cls: 'agent-badge-error', title: t.agentErrorLabel }
+          : null
 
   return (
     <div
