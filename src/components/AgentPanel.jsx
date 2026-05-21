@@ -14,11 +14,12 @@ export default function AgentPanel({ task, project, onClose, onApprove }) {
   const { t, lang } = useLang()
   const [agentType, setAgentType] = useState('auto')
   const [steps, setSteps] = useState([])
-  const [output, setOutput] = useState('')
+  const [output, setOutput] = useState(task.agentOutput || '')
   const [running, setRunning] = useState(false)
-  const [done, setDone] = useState(false)
+  const [done, setDone] = useState(!!task.agentOutput)
   const abortRef = useRef(false)
   const stepsRef = useRef(null)
+  const isSavedOutput = done && !running && task.agentOutput && output === task.agentOutput
 
   const run = () => {
     setSteps([])
@@ -86,6 +87,12 @@ export default function AgentPanel({ task, project, onClose, onApprove }) {
           <button className="btn btn-ai" onClick={run} disabled={running}>
             {running ? t.agentRunning : done ? t.agentRerun : t.agentRun}
           </button>
+
+          {isSavedOutput && (
+            <div style={{ fontSize: 11, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>🤖✓</span> {t.agentViewingSaved}
+            </div>
+          )}
 
           {/* Agent step log */}
           {steps.length > 0 && (

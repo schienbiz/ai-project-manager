@@ -169,6 +169,7 @@ export const T = {
     agentPlaceholder:  'Choose an agent type and click Run Agent.',
     agentApprovedLabel:'AI output approved — moved to Review',
     agentSavedLabel:   'AI output saved',
+    agentViewingSaved: 'Viewing saved AI output — click Run Again to regenerate',
     translating:       'Translating…',
   },
 
@@ -335,6 +336,7 @@ export const T = {
     agentPlaceholder:  'اختر نوع الوكيل ثم اضغط تشغيل.',
     agentApprovedLabel:'تمت الموافقة على مخرجات الذكاء الاصطناعي',
     agentSavedLabel:   'تم حفظ مخرجات الذكاء الاصطناعي',
+    agentViewingSaved: 'عرض المخرجات المحفوظة — اضغط تشغيل مجدداً للتجديد',
     translating:       'جارٍ الترجمة…',
   },
 
@@ -501,6 +503,7 @@ export const T = {
     agentPlaceholder:  '選擇代理類型後點擊執行。',
     agentApprovedLabel:'AI 輸出已核准，已移至審核',
     agentSavedLabel:   'AI 輸出已儲存',
+    agentViewingSaved: '目前顯示已儲存的 AI 輸出 — 點擊重新執行以更新',
     translating:       '翻譯中…',
   },
 }

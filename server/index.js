@@ -737,14 +737,14 @@ async function runResearcher(task, project, lang, res) {
 }
 
 async function runWriter(task, project, projectTasks, lang, res) {
-  const researchTasks = projectTasks.filter(t => t.agentOutput && t.agentType === 'research')
-  if (researchTasks.length) sseStep(res, `📚 Loading research context from ${researchTasks.length} task(s)...`)
+  const contextTasks = projectTasks.filter(t => t.agentOutput && t.id !== task.id)
+  if (contextTasks.length) sseStep(res, `📚 Loading context from ${contextTasks.length} task(s)...`)
   sseStep(res, '✍️ Drafting document...')
 
-  const ctx = researchTasks.map(t => `**From "${t.title}":**\n${t.agentOutput.slice(0, 1000)}`).join('\n\n')
+  const ctx = contextTasks.map(t => `**From "${t.title}" [${t.agentType || 'agent'}]:**\n${t.agentOutput.slice(0, 3000)}`).join('\n\n')
   const draft = await multiGenerate([
     { role: 'system', content: getPMSystem() + getLangDirective(lang) },
-    { role: 'user', content: `Task: "${task.title}"\n${task.description ? `Details: ${task.description}\n` : ''}Project: "${project.name}" — ${project.goal || ''}\n\n${ctx ? `Research context:\n${ctx}\n\n` : ''}Write a complete, professional document. Format as clear markdown.` },
+    { role: 'user', content: `Task: "${task.title}"\n${task.description ? `Details: ${task.description}\n` : ''}Project: "${project.name}" — ${project.goal || ''}\n\n${ctx ? `Context from other completed tasks:\n${ctx}\n\n` : ''}Write a complete, professional document for this task. Use all available context. Format as clear markdown.` },
   ], 1500)
   await streamText(res, draft)
 }
