@@ -403,7 +403,7 @@ async function runAgentBackground(taskId, projectId, lang) {
     const tList = readJSON(TASKS_FILE, [])
     const idx   = tList.findIndex(t => t.id === taskId)
     if (idx !== -1) {
-      tList[idx] = { ...tList[idx], agentType: type, agentOutput: output, agentStatus: 'done', updatedAt: now() }
+      tList[idx] = { ...tList[idx], agentType: type, agentOutput: output, agentStatus: 'saved', updatedAt: now() }
       writeJSON(TASKS_FILE, tList)
     }
     console.log(`[agent-bg] ${type} done — "${task.title}"`)
