@@ -204,9 +204,10 @@ app.use((req, res, next) => {
 const DATA_DIR = path.join(__dirname, '../data')
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
 
-const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json')
-const TASKS_FILE    = path.join(DATA_DIR, 'tasks.json')
-const NOTES_FILE    = path.join(DATA_DIR, 'notes.json')
+const PROJECTS_FILE    = path.join(DATA_DIR, 'projects.json')
+const TASKS_FILE       = path.join(DATA_DIR, 'tasks.json')
+const NOTES_FILE       = path.join(DATA_DIR, 'notes.json')
+const DIGEST_STATE_FILE = path.join(DATA_DIR, 'digest-state.json')
 
 function readJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf-8')) } catch { return fallback }
@@ -868,7 +869,15 @@ async function sendTelegram(text) {
   } catch (err) { console.error('[telegram] send error:', err.message) }
 }
 
-let _lastDigestAt = null
+// Restore digest state across restarts so we never double-send on the same day
+let _lastDigestAt = readJSON(DIGEST_STATE_FILE, {}).lastDigestAt || null
+if (_lastDigestAt) console.log(`[digest] restored lastDigestAt: ${_lastDigestAt}`)
+
+function digestSentToday() {
+  if (!_lastDigestAt) return false
+  const taipeiDay = (d) => new Date(d).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' })
+  return taipeiDay(_lastDigestAt) === taipeiDay(new Date())
+}
 
 async function sendMorningDigest() {
   const botToken = process.env.BOT_TOKEN
@@ -929,6 +938,7 @@ Rules:
 
   await sendTelegram(msg)
   _lastDigestAt = new Date().toISOString()
+  fs.writeFileSync(DIGEST_STATE_FILE, JSON.stringify({ lastDigestAt: _lastDigestAt }))
   console.log(`[digest] sent — ${projects.length} projects`)
 }
 
@@ -941,7 +951,11 @@ function scheduleNextDigest() {
   const ms = untilSec * 1000
   console.log(`[digest] next run: 09:00 Taipei (in ${Math.floor(ms/3600000)}h ${Math.floor(ms%3600000/60000)}m)`)
   setTimeout(async () => {
-    await sendMorningDigest().catch(e => console.error('[digest] error:', e.message))
+    if (digestSentToday()) {
+      console.log('[digest] already sent today — skipping duplicate')
+    } else {
+      await sendMorningDigest().catch(e => console.error('[digest] error:', e.message))
+    }
     scheduleNextDigest()
   }, ms)
 }
