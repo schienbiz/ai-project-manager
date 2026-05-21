@@ -666,6 +666,137 @@ Provide:
   await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 800)
 })
 
+// ── AI Team Agents ────────────────────────────────────────────────────────────
+async function searchWeb(query) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 18000)
+  try {
+    const url = `https://s.jina.ai/${encodeURIComponent(query)}`
+    const r = await undiciFetch(url, {
+      headers: { 'Accept': 'text/plain', 'X-No-Cache': 'true' },
+      signal: controller.signal,
+    })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const text = await r.text()
+    return text.slice(0, 4000)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function classifyTask(title, description) {
+  try {
+    const result = await multiGenerate([
+      { role: 'system', content: 'Classify the task type. Reply with one word only: research, write, or plan.' },
+      { role: 'user', content: `Task: "${title}"\n${description ? `Details: ${description}` : ''}\n\nClassify as:\n- research: gather info, market analysis, competitor research, fact-finding\n- write: create documents, reports, emails, proposals, specs, summaries\n- plan: break down work, define subtasks, scheduling, roadmap\n\nOne word only.` },
+    ], 10)
+    const clean = result?.toLowerCase().trim().replace(/[^a-z]/g, '') || 'write'
+    return ['research', 'write', 'plan'].includes(clean) ? clean : 'write'
+  } catch { return 'write' }
+}
+
+function sseStep(res, text) { res.write(`data: ${JSON.stringify({ type: 'step', text })}\n\n`) }
+function sseOut(res, text)  { res.write(`data: ${JSON.stringify({ type: 'output', text })}\n\n`) }
+
+async function streamText(res, text) {
+  const CHUNK = 12
+  for (let i = 0; i < text.length; i += CHUNK) sseOut(res, text.slice(i, i + CHUNK))
+}
+
+async function runResearcher(task, project, lang, res) {
+  sseStep(res, '🧠 Planning research strategy...')
+  let queries = []
+  try {
+    const qText = await multiGenerate([
+      { role: 'system', content: getPMSystem() },
+      { role: 'user', content: `Task: "${task.title}"\nProject: "${project.name}" — ${project.goal || ''}\n\nGenerate 3 targeted search queries. Return ONLY a JSON array: ["q1","q2","q3"]` },
+    ], 100)
+    const m = qText.match(/\[[\s\S]*?\]/)
+    if (m) queries = JSON.parse(m[0])
+  } catch {}
+  if (!queries.length) queries = [task.title]
+
+  const results = []
+  for (const q of queries.slice(0, 3)) {
+    sseStep(res, `🔎 Searching: "${q}"`)
+    try {
+      const content = await searchWeb(q)
+      results.push({ query: q, content })
+    } catch (e) {
+      sseStep(res, `⚠️ Search failed: ${e.message}`)
+    }
+  }
+
+  sseStep(res, '✍️ Synthesizing findings...')
+  const context = results.map(r => `### ${r.query}\n${r.content}`).join('\n\n---\n\n')
+  const report = await multiGenerate([
+    { role: 'system', content: getPMSystem() + getLangDirective(lang) },
+    { role: 'user', content: `Task: "${task.title}"\nProject: "${project.name}" — ${project.goal || ''}\n\n${context ? `Research data:\n${context}\n\n` : ''}Write a comprehensive research report with: key findings, data analysis, recommendations, next steps. Format as markdown with sections.` },
+  ], 1500)
+  await streamText(res, report)
+}
+
+async function runWriter(task, project, projectTasks, lang, res) {
+  const researchTasks = projectTasks.filter(t => t.agentOutput && t.agentType === 'research')
+  if (researchTasks.length) sseStep(res, `📚 Loading research context from ${researchTasks.length} task(s)...`)
+  sseStep(res, '✍️ Drafting document...')
+
+  const ctx = researchTasks.map(t => `**From "${t.title}":**\n${t.agentOutput.slice(0, 1000)}`).join('\n\n')
+  const draft = await multiGenerate([
+    { role: 'system', content: getPMSystem() + getLangDirective(lang) },
+    { role: 'user', content: `Task: "${task.title}"\n${task.description ? `Details: ${task.description}\n` : ''}Project: "${project.name}" — ${project.goal || ''}\n\n${ctx ? `Research context:\n${ctx}\n\n` : ''}Write a complete, professional document. Format as clear markdown.` },
+  ], 1500)
+  await streamText(res, draft)
+}
+
+async function runPlanner(task, project, lang, res) {
+  sseStep(res, '🗺️ Breaking down into subtasks...')
+  const plan = await multiGenerate([
+    { role: 'system', content: getPMSystem() + getLangDirective(lang) },
+    { role: 'user', content: `Task: "${task.title}"\n${task.description ? `Details: ${task.description}\n` : ''}Project: "${project.name}" — ${project.goal || ''}\n\nCreate an execution plan:\n1. Brief approach (2-3 sentences)\n2. 3-7 subtasks as JSON in a code block:\n\`\`\`json\n[\n  {"title":"...","type":"research|write|action","description":"...","priority":"low|medium|high","estimatedHours":N}\n]\n\`\`\`\n\nFormat as markdown.` },
+  ], 1000)
+  await streamText(res, plan)
+}
+
+app.post('/api/ai/agent-run', async (req, res) => {
+  const { taskId, projectId, agentType, lang } = req.body
+  const task    = readJSON(TASKS_FILE, []).find(t => t.id === taskId)
+  const project = readJSON(PROJECTS_FILE, []).find(p => p.id === projectId)
+  if (!task || !project) return res.status(404).json({ error: 'not found' })
+
+  const projectTasks = readJSON(TASKS_FILE, []).filter(t => t.projectId === projectId)
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  try {
+    let type = agentType
+    if (!type || type === 'auto') {
+      sseStep(res, '🤖 Analyzing task...')
+      type = await classifyTask(task.title, task.description)
+      sseStep(res, `📋 Agent type: ${type}`)
+    }
+
+    if (type === 'research') await runResearcher(task, project, lang, res)
+    else if (type === 'plan')  await runPlanner(task, project, lang, res)
+    else                       await runWriter(task, project, projectTasks, lang, res)
+
+    // Persist agentType so writer agents can use research output as context
+    const tList = readJSON(TASKS_FILE, [])
+    const idx = tList.findIndex(t => t.id === taskId)
+    if (idx !== -1) { tList[idx].agentType = type; tList[idx].updatedAt = now(); writeJSON(TASKS_FILE, tList) }
+
+    console.log(`[agent] ${type} completed — "${task.title}"`)
+  } catch (err) {
+    console.error('[agent] error:', err.message)
+    sseStep(res, `❌ Error: ${err.message}`)
+  }
+
+  res.write('data: [DONE]\n\n')
+  res.end()
+})
+
 // ── Morning digest ────────────────────────────────────────────────────────────
 let _lastDigestAt = null
 

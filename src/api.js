@@ -40,6 +40,44 @@ function del(url) {
   return fetch(url, { method: 'DELETE' }).then(json)
 }
 
+// SSE helper for agent endpoints — separates step logs from output chunks
+export async function streamAgent(endpoint, body, onStep, onChunk, onDone, onError) {
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop()
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const data = line.slice(6)
+        if (data === '[DONE]') { onDone?.(); return }
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed.type === 'step')   onStep?.(parsed.text)
+          else if (parsed.type === 'output') onChunk?.(parsed.text)
+          if (parsed.error) { onError?.(parsed.error); return }
+        } catch {}
+      }
+    }
+    onDone?.()
+  } catch (err) {
+    onError?.(err.message)
+  }
+}
+
 // SSE streaming helper for AI endpoints
 export async function streamAI(endpoint, body, onChunk, onDone, onError) {
   try {

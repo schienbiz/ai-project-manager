@@ -158,6 +158,18 @@ export const T = {
     notesEmpty:       'No notes yet. Write something.',
     noteSave:         'Save',
     noteDelete:       'Delete',
+
+    // AI Team Agent
+    agentTitle:        'AI Agent',
+    agentRun:          '▶ Run Agent',
+    agentRunning:      '🤖 Running…',
+    agentRerun:        '↺ Run Again',
+    agentApprove:      '✅ Approve → Review',
+    agentSave:         '💾 Save Output',
+    agentPlaceholder:  'Choose an agent type and click Run Agent.',
+    agentApprovedLabel:'AI output approved — moved to Review',
+    agentSavedLabel:   'AI output saved',
+    translating:       'Translating…',
   },
 
   ar: {
@@ -312,6 +324,18 @@ export const T = {
     notesEmpty:       'لا توجد ملاحظات بعد. اكتب شيئاً.',
     noteSave:         'حفظ',
     noteDelete:       'حذف',
+
+    // AI Team Agent
+    agentTitle:        'وكيل الذكاء الاصطناعي',
+    agentRun:          '▶ تشغيل الوكيل',
+    agentRunning:      '🤖 جارٍ التشغيل…',
+    agentRerun:        '↺ تشغيل مجدداً',
+    agentApprove:      '✅ موافقة → للمراجعة',
+    agentSave:         '💾 حفظ المخرجات',
+    agentPlaceholder:  'اختر نوع الوكيل ثم اضغط تشغيل.',
+    agentApprovedLabel:'تمت الموافقة على مخرجات الذكاء الاصطناعي',
+    agentSavedLabel:   'تم حفظ مخرجات الذكاء الاصطناعي',
+    translating:       'جارٍ الترجمة…',
   },
 
   zh: {
@@ -466,5 +490,17 @@ export const T = {
     notesEmpty:       '尚無筆記，立即記錄第一筆。',
     noteSave:         '儲存',
     noteDelete:       '刪除',
+
+    // AI Team Agent
+    agentTitle:        'AI 執行代理',
+    agentRun:          '▶ 執行代理',
+    agentRunning:      '🤖 代理執行中…',
+    agentRerun:        '↺ 重新執行',
+    agentApprove:      '✅ 核准 → 移至審核',
+    agentSave:         '💾 儲存輸出',
+    agentPlaceholder:  '選擇代理類型後點擊執行。',
+    agentApprovedLabel:'AI 輸出已核准，已移至審核',
+    agentSavedLabel:   'AI 輸出已儲存',
+    translating:       '翻譯中…',
   },
 }

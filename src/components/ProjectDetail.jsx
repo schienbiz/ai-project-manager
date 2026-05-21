@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import AIPanel from './AIPanel.jsx'
+import AgentPanel from './AgentPanel.jsx'
 import TaskForm from './TaskForm.jsx'
 import { useLang } from '../i18n.js'
 
@@ -27,6 +28,7 @@ export default function ProjectDetail({
   const STATUS_LABEL = { active: t.statusActive, paused: t.statusPaused, completed: t.statusCompleted, archived: t.statusArchived }
   const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const [showAI, setShowAI] = useState(false)
+  const [agentTask, setAgentTask] = useState(null)
   const [taskForm, setTaskForm] = useState(null)
   const [draggingId, setDraggingId] = useState(null)
   const [dragOver, setDragOver] = useState(null)
@@ -100,6 +102,7 @@ export default function ProjectDetail({
                     onDelete={() => onDeleteTask(task.id)}
                     onStatusChange={(status) => onUpdateTask(task.id, { status })}
                     onQuickDone={() => onUpdateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done' })}
+                    onRunAgent={() => setAgentTask(task)}
                   />
                 ))}
                 <button className="kanban-add" onClick={() => setTaskForm({ status: col.key })}>
@@ -140,6 +143,19 @@ export default function ProjectDetail({
           onClose={() => setShowAI(false)}
           onApplyTasks={onBulkCreateTasks}
           onCreateNote={onCreateNote}
+        />
+      )}
+
+      {agentTask && (
+        <AgentPanel
+          task={agentTask}
+          project={project}
+          onClose={() => setAgentTask(null)}
+          onApprove={(taskId, output, action) => {
+            const updates = { agentOutput: output, agentStatus: action }
+            if (action === 'approved') updates.status = 'review'
+            onUpdateTask(taskId, updates)
+          }}
         />
       )}
     </div>
@@ -217,11 +233,16 @@ function NoteCard({ note, onDelete }) {
   )
 }
 
-function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone }) {
+function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone, onRunAgent }) {
   const { t } = useLang()
   const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const cls = dueCls(task.dueDate, task.status)
   const isDone = task.status === 'done'
+  const agentBadge = task.agentStatus === 'approved'
+    ? { icon: '🤖✓', cls: 'agent-badge-approved', title: t.agentApprovedLabel }
+    : task.agentStatus === 'saved'
+      ? { icon: '🤖', cls: 'agent-badge-saved', title: t.agentSavedLabel }
+      : null
 
   return (
     <div
@@ -236,6 +257,11 @@ function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone
           title={isDone ? t.quickReopenLabel : t.quickDoneLabel}
         />
         <div className="task-title">{task.title}</div>
+        {agentBadge && (
+          <span className={`agent-badge ${agentBadge.cls}`} title={agentBadge.title}>
+            {agentBadge.icon}
+          </span>
+        )}
       </div>
       {task.description && <div className="task-desc">{task.description.slice(0, 80)}{task.description.length > 80 ? '…' : ''}</div>}
       <div className="task-meta">
@@ -250,6 +276,7 @@ function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone
         {task.assignee && <span className="text-muted text-sm">{task.assignee}</span>}
       </div>
       <div className="task-actions">
+        <button className="btn btn-sm btn-ai" onClick={onRunAgent} title={t.agentRun}>🤖</button>
         <button className="btn btn-sm" onClick={onEdit}>{t.edit}</button>
         <button className="btn btn-sm btn-danger" onClick={onDelete}>×</button>
       </div>
