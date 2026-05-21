@@ -19,6 +19,7 @@ export const api = {
   updateTask:      (id, data) => put(`/pm/api/tasks/${id}`, data),
   bulkUpdateTasks: (updates) => put('/pm/api/tasks/bulk', updates),
   deleteTask:      (id) => del(`/pm/api/tasks/${id}`),
+  retryAgent:      (id, lang) => post(`/pm/api/tasks/${id}/agent/retry`, { lang }),
 
   // Notes
   getNotes:        (projectId) => fetch(`/pm/api/notes?projectId=${projectId}`).then(json),

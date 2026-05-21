@@ -21,7 +21,13 @@ check_service() {
   HTTP=$(curl -s --max-time 5 "$URL" -o /dev/null -w '%{http_code}')
   if [ "$HTTP" = "000" ] || [ -z "$HTTP" ]; then
     echo "[watchdog] $(date): $LABEL unreachable (HTTP $HTTP) — restarting"
-    launchctl kickstart -k "gui/501/$LABEL" 2>/dev/null || true
+    # kickstart works if plist is loaded; if not (e.g. accidental unload), load it first
+    if ! launchctl kickstart -k "gui/501/$LABEL" 2>/dev/null; then
+      echo "[watchdog] $(date): $LABEL — kickstart failed, loading plist first"
+      launchctl load ~/Library/LaunchAgents/$LABEL.plist 2>/dev/null || true
+      sleep 2
+      launchctl kickstart -k "gui/501/$LABEL" 2>/dev/null || true
+    fi
     RESTARTED+=("$LABEL")
   else
     echo "[watchdog] $(date): $LABEL OK ($HTTP)"

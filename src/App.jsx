@@ -100,6 +100,12 @@ export default function App() {
     setNotes(prev => prev.filter(n => n.id !== id))
   }
 
+  const handleRetryAgent = async (id) => {
+    const t = await api.retryAgent(id, lang)
+    setTasks(prev => prev.map(x => x.id === id ? t : x))
+    return t
+  }
+
   const handleBulkCreateTasks = async (tasksData, projectId) => {
     const created = await Promise.all(tasksData.map(t => api.createTask({ ...t, projectId })))
     setTasks(prev => [...prev, ...created])
@@ -158,6 +164,7 @@ export default function App() {
             onBulkCreateTasks={(ts) => handleBulkCreateTasks(ts, selectedProject.id)}
             onCreateNote={handleCreateNote}
             onDeleteNote={handleDeleteNote}
+            onRetryAgent={handleRetryAgent}
           />
         )}
       </div>

@@ -22,7 +22,7 @@ export default function ProjectDetail({
   project, tasks, notes = [], allProjects = [], allTasks = [],
   onUpdateProject, onDeleteProject, onEditProject,
   onCreateTask, onUpdateTask, onDeleteTask, onBulkCreateTasks,
-  onCreateNote, onDeleteNote,
+  onCreateNote, onDeleteNote, onRetryAgent,
 }) {
   const { t, lang } = useLang()
   const STATUS_LABEL = { active: t.statusActive, paused: t.statusPaused, completed: t.statusCompleted, archived: t.statusArchived }
@@ -103,6 +103,7 @@ export default function ProjectDetail({
                     onStatusChange={(status) => onUpdateTask(task.id, { status, _lang: lang })}
                     onQuickDone={() => onUpdateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done', _lang: lang })}
                     onRunAgent={() => setAgentTask(task)}
+                    onRetryAgent={() => onRetryAgent?.(task.id)}
                   />
                 ))}
                 <button className="kanban-add" onClick={() => setTaskForm({ status: col.key })}>
@@ -233,7 +234,7 @@ function NoteCard({ note, onDelete }) {
   )
 }
 
-function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone, onRunAgent }) {
+function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone, onRunAgent, onRetryAgent }) {
   const { t } = useLang()
   const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const cls = dueCls(task.dueDate, task.status)
@@ -262,7 +263,12 @@ function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone
         />
         <div className="task-title">{task.title}</div>
         {agentBadge && (
-          <span className={`agent-badge ${agentBadge.cls}`} title={agentBadge.title}>
+          <span
+            className={`agent-badge ${agentBadge.cls}`}
+            title={agentBadge.title}
+            onClick={task.agentStatus === 'error' ? (e) => { e.stopPropagation(); onRetryAgent?.() } : undefined}
+            style={task.agentStatus === 'error' ? { cursor: 'pointer' } : undefined}
+          >
             {agentBadge.icon}
           </span>
         )}

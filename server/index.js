@@ -441,6 +441,18 @@ app.put('/api/tasks/:id', (req, res) => {
   }
 })
 
+app.post('/api/tasks/:id/agent/retry', (req, res) => {
+  const list = readJSON(TASKS_FILE, [])
+  const idx = list.findIndex(t => t.id === req.params.id)
+  if (idx === -1) return res.status(404).json({ error: 'Not found' })
+  list[idx] = { ...list[idx], agentStatus: 'running', updatedAt: now() }
+  writeJSON(TASKS_FILE, list)
+  res.json(list[idx])
+  runAgentBackground(req.params.id, list[idx].projectId, req.body.lang || 'en').catch(err =>
+    console.error('[agent-bg] retry unhandled:', err.message)
+  )
+})
+
 app.delete('/api/tasks/:id', (req, res) => {
   writeJSON(TASKS_FILE, readJSON(TASKS_FILE, []).filter(t => t.id !== req.params.id))
   res.json({ ok: true })

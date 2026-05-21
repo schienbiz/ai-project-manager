@@ -39,11 +39,18 @@ cat /tmp/watchdog.log  # check last run
 
 **Auto-heal:** Watchdog restarts it within 5 min + sends Telegram alert. KeepAlive:true also restarts on crash instantly.
 
+Watchdog restart logic (bash 3.2 compatible — no `declare -A`):
+1. Try `launchctl kickstart -k gui/501/<LABEL>` — works when plist is loaded
+2. If kickstart fails (plist was unloaded), run `launchctl load ~/Library/LaunchAgents/<LABEL>.plist` then kickstart again
+
 **Manual fix if watchdog can't reach it:**
 ```bash
 launchctl kickstart -k gui/501/<LABEL>
 sleep 3
 curl -s http://localhost:<PORT>/health | head
+# If kickstart fails (plist unloaded):
+launchctl load ~/Library/LaunchAgents/<LABEL>.plist
+launchctl kickstart -k gui/501/<LABEL>
 ```
 
 ---
@@ -135,7 +142,25 @@ Note: Static ngrok domain never changes after restart.
 
 ---
 
-## 9. Syncthing Conflict Files
+## 9. AI PM Background Agent Error (⚠️ Badge)
+
+**Detect:** Task card shows ⚠️ badge (agentStatus = 'error').
+
+**Auto-heal:** Click the ⚠️ badge directly on the task card — it calls `POST /api/tasks/:id/agent/retry`, resets agentStatus to 'running', and re-runs the background agent. The ⏳ badge appears while it runs; on success it becomes 🤖 (saved).
+
+**Root causes and manual check:**
+```bash
+# Check what error was logged
+tail -30 /tmp/ai-project-manager.log | grep -A2 'agent-bg.*error'
+```
+
+Common causes: AI provider timeout (all 3 models busy), task has no title/description for the agent to work with.
+
+**Prevention:** If all providers fail consistently, check API key validity in `.env` (GROQ_API_KEY, CEREBRAS_API_KEY).
+
+---
+
+## 10. Syncthing Conflict Files
 
 **Detect:** `find ~/CloudSync -name "*.sync-conflict-*"`
 
