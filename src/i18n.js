@@ -124,10 +124,33 @@ export const T = {
     phPlan:    'AI will generate a full task breakdown for this project. Adjust team size and due date for better results.',
     phStandup: 'AI will write a daily standup based on your current task status.',
     phRisks:   'AI will analyze your blocked and overdue tasks to surface risks and recommend actions.',
-    phReport:  'AI will generate a professional weekly status report for this project.',
+    phReport:  'AI will generate a professional weekly status report covering all your projects.',
     phNotes:   'Paste meeting notes above and AI will extract all action items as tasks.',
     teamSizePlaceholder:  'e.g. 3 engineers',
     notesPastePlaceholder:'Paste your meeting notes here. AI will extract all action items as tasks.',
+    allProjectsReportInfo: (n) => `Generating weekly report across all ${n} projects.`,
+
+    // Task quick-done
+    quickDoneLabel:   'Mark done',
+    quickReopenLabel: 'Reopen',
+
+    // AI Estimate
+    aiEstimate:     'AI Estimate',
+    estimating:     'Estimating…',
+    acceptEstimate: 'Use',
+
+    // Quick Start
+    quickStartPlaceholder: '⚡ Quick start — type a project title and press Enter',
+    quickStartGenerating:  '⏳ AI is building your plan…',
+    quickStartDone:        (n) => `✅ Created with ${n} tasks — opening board`,
+    quickStartFailed:      '❌ Failed — try again',
+    aiError:               'Error: ',
+    translateBtn:          '✨ Translate to English',
+
+    // Global AI Insights (Dashboard)
+    globalAiInsights:  'AI Insights',
+    allProjectsReport: '📊 Weekly Report',
+    allProjectsRisks:  '⚠️ Risk Scan',
 
     // Notes section
     notesTitle:       'Notes',
@@ -137,11 +160,164 @@ export const T = {
     noteDelete:       'Delete',
   },
 
+  ar: {
+    // App / shared
+    appName:      'مدير المشاريع الذكي',
+    loading:      'جاري التحميل…',
+    dateLocale:   'ar-AE',
+
+    // Sidebar
+    dashboard:  'لوحة التحكم',
+    active:     'نشطة',
+    other:      'أخرى',
+    noProjects: 'لا توجد مشاريع بعد',
+    newProject: '+ مشروع جديد',
+
+    // Dashboard stats
+    activeProjects:    'المشاريع النشطة',
+    tasksInProgress:   'المهام الجارية',
+    blocked:           'محجوب',
+    overdue:           'متأخر',
+    done:              'مكتمل',
+    completedProjects: 'المشاريع المكتملة',
+    ofTotal:      (n) => `من أصل ${n}`,
+    dueThisWeek:  'مستحق هذا الأسبوع',
+    allProjects:  'جميع المشاريع',
+    noProjectsMsg:'لا توجد مشاريع بعد. أنشئ أولاً.',
+
+    taskCount:    (done, total, pct) => `${done}/${total} مهام · ${pct}%`,
+    taskCountPlain:(n) => `${n} مهام`,
+    pct:          (p) => `${p}%`,
+
+    // Project form
+    editProject:    'تعديل المشروع',
+    newProjectTitle:'مشروع جديد',
+    projectNameLabel:'اسم المشروع *',
+    goalLabel:      'الهدف',
+    descriptionLabel:'الوصف',
+    statusLabel:    'الحالة',
+    priorityLabel:  'الأولوية',
+    startDateLabel: 'تاريخ البدء',
+    dueDateLabel:   'تاريخ الانتهاء',
+    cancel:         'إلغاء',
+    saveChanges:    'حفظ التغييرات',
+    createProject:  'إنشاء المشروع',
+    saving:         'جاري الحفظ…',
+
+    statusActive:    'نشط',
+    statusPaused:    'متوقف',
+    statusCompleted: 'مكتمل',
+    statusArchived:  'مؤرشف',
+
+    priorityLow:    'منخفض',
+    priorityMedium: 'متوسط',
+    priorityHigh:   'مرتفع',
+    priorityUrgent: 'عاجل',
+
+    projectNamePlaceholder: 'مثال: تصميم التطبيق',
+    goalPlaceholder:        'كيف يبدو النجاح؟',
+    descPlaceholder:        'وصف موجز للمشروع…',
+
+    // Task form
+    editTask:  'تعديل المهمة',
+    newTask:   'مهمة جديدة',
+    titleLabel:'العنوان *',
+    estHours:  'الساعات المقدرة',
+    actHours:  'الساعات الفعلية',
+    assignee:  'المسؤول',
+    addTask:   'إضافة مهمة',
+
+    statusTodo:       'قيد الانتظار',
+    statusInProgress: 'جارٍ',
+    statusReview:     'مراجعة',
+    statusDone:       'مكتمل',
+    statusBlocked:    'محجوب',
+
+    taskTitlePlaceholder:'مثال: تصميم شاشة الدخول',
+    taskDescPlaceholder: 'التفاصيل ومعايير القبول والملاحظات…',
+    estHoursPlaceholder: 'مثال: 4',
+    actHoursPlaceholder: 'يُملأ عند الإنجاز',
+    assigneePlaceholder: 'الاسم أو @handle',
+
+    // Project detail / Kanban
+    aiAssistant:  '✨ المساعد الذكي',
+    edit:         'تعديل',
+    delete:       'حذف',
+    due:          'الاستحقاق',
+    addTaskBtn:   '+ إضافة مهمة',
+    deleteConfirm:'هل تريد حذف هذا المشروع وجميع مهامه؟',
+
+    colTodo:       'قيد الانتظار',
+    colInProgress: 'جارٍ',
+    colReview:     'مراجعة',
+    colDone:       'مكتمل',
+    colBlocked:    'محجوب',
+
+    // AI panel
+    aiPanelTitle:   (name) => `✨ المساعد الذكي — ${name}`,
+    tabPlan:        '📋 إنشاء خطة',
+    tabStandup:     '📣 الاجتماع اليومي',
+    tabRisks:       '⚠️ المخاطر',
+    tabReport:      '📊 التقرير الأسبوعي',
+    tabNotes:       '📝 تحليل المحاضر',
+    teamSizeLabel:  'حجم الفريق',
+    dueDateLabel2:  'تاريخ الانتهاء',
+    run:            '▶ تشغيل',
+    thinking:       '⏳ جاري التفكير…',
+    pasteNotesLabel:'الصق محاضر الاجتماع',
+    standupInfo:    (done, ip, bl) => `يُنشئ اجتماع يومي بناءً على حالة المهام (${done} مكتمل، ${ip} جارٍ، ${bl} محجوب).`,
+    risksInfo:      (bl, od) => `يحلل ${bl} مهمة محجوبة و${od} مهمة متأخرة لتحديد المخاطر.`,
+    tasksReady:     (n) => `✅ ${n} مهام جاهزة للتطبيق`,
+    applyToBoard:   'تطبيق على اللوحة',
+    applying:       'جاري التطبيق…',
+    more:           (n) => `+${n} المزيد`,
+    poweredBy:      'مدعوم بـ Groq · Cerebras',
+    close:          'إغلاق',
+    appliedMsg:     (n) => `\n\n✅ تم تطبيق ${n} مهام على اللوحة.`,
+
+    phPlan:    'سيُنشئ الذكاء الاصطناعي تقسيم مهام كامل لهذا المشروع. اضبط حجم الفريق وتاريخ الانتهاء للحصول على نتائج أفضل.',
+    phStandup: 'سيكتب الذكاء الاصطناعي اجتماعاً يومياً بناءً على حالة مهامك الحالية.',
+    phRisks:   'سيحلل الذكاء الاصطناعي المهام المحجوبة والمتأخرة للكشف عن المخاطر وتقديم التوصيات.',
+    phReport:  'سيُنشئ الذكاء الاصطناعي تقريراً أسبوعياً احترافياً يشمل جميع مشاريعك.',
+    phNotes:   'الصق محاضر الاجتماع أعلاه وسيستخرج الذكاء الاصطناعي جميع بنود العمل كمهام.',
+    teamSizePlaceholder:  'مثال: 3 مهندسين',
+    notesPastePlaceholder:'الصق محاضر اجتماعك هنا. سيستخرج الذكاء الاصطناعي جميع بنود العمل كمهام.',
+    allProjectsReportInfo: (n) => `جاري إنشاء تقرير أسبوعي لجميع المشاريع الـ ${n}.`,
+
+    // Task quick-done
+    quickDoneLabel:   'تحديد كمكتمل',
+    quickReopenLabel: 'إعادة فتح',
+
+    // AI Estimate
+    aiEstimate:     'تقدير ذكي',
+    estimating:     'جاري التقدير…',
+    acceptEstimate: 'استخدام',
+
+    // Quick Start
+    quickStartPlaceholder: '⚡ بداية سريعة — اكتب اسم المشروع واضغط Enter',
+    quickStartGenerating:  '⏳ الذكاء الاصطناعي يبني خطتك…',
+    quickStartDone:        (n) => `✅ تم الإنشاء بـ ${n} مهام — فتح اللوحة`,
+    quickStartFailed:      '❌ فشل — حاول مجدداً',
+    aiError:               'خطأ: ',
+    translateBtn:          '✨ ترجمة إلى العربية',
+
+    // Global AI Insights (Dashboard)
+    globalAiInsights:  'رؤى الذكاء الاصطناعي',
+    allProjectsReport: '📊 التقرير الأسبوعي',
+    allProjectsRisks:  '⚠️ فحص المخاطر',
+
+    // Notes section
+    notesTitle:       'الملاحظات',
+    notesPlaceholder: 'اكتب ملاحظة… (Shift+Enter للسطر الجديد، Enter للحفظ)',
+    notesEmpty:       'لا توجد ملاحظات بعد. اكتب شيئاً.',
+    noteSave:         'حفظ',
+    noteDelete:       'حذف',
+  },
+
   zh: {
     // App / shared
     appName:      'AI 專案管理',
     loading:      '載入中…',
-    langToggle:   'EN',
     dateLocale:   'zh-TW',
 
     // Sidebar
@@ -256,10 +432,33 @@ export const T = {
     phPlan:    'AI 將根據本專案生成完整任務分解。調整團隊規模和截止日期可獲得更佳結果。',
     phStandup: 'AI 將根據目前任務狀態生成每日站會摘要。',
     phRisks:   'AI 將分析阻塞和逾期任務，找出風險並提出行動建議。',
-    phReport:  'AI 將為本專案生成專業的週報。',
+    phReport:  'AI 將生成涵蓋所有專案的專業週報。',
     phNotes:   '請在上方貼上會議記錄，AI 將提取所有行動項目並轉為任務。',
     teamSizePlaceholder:  '例如：3 位工程師',
     notesPastePlaceholder:'請在此貼上會議記錄，AI 將提取所有行動項目並轉為任務。',
+    allProjectsReportInfo: (n) => `正在生成涵蓋全部 ${n} 個專案的週報。`,
+
+    // Task quick-done
+    quickDoneLabel:   '標記完成',
+    quickReopenLabel: '重新開啟',
+
+    // AI Estimate
+    aiEstimate:     'AI 估算',
+    estimating:     '估算中…',
+    acceptEstimate: '採用',
+
+    // Quick Start
+    quickStartPlaceholder: '⚡ 快速建立 — 輸入專案名稱並按 Enter',
+    quickStartGenerating:  '⏳ AI 正在生成計劃…',
+    quickStartDone:        (n) => `✅ 已建立，共 ${n} 個任務 — 開啟看板`,
+    quickStartFailed:      '❌ 建立失敗，請再試一次',
+    aiError:               '錯誤：',
+    translateBtn:          '✨ 翻譯為繁體中文',
+
+    // Global AI Insights (Dashboard)
+    globalAiInsights:  'AI 洞察',
+    allProjectsReport: '📊 週報',
+    allProjectsRisks:  '⚠️ 風險掃描',
 
     // Notes section
     notesTitle:       '筆記',

@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useLang } from '../i18n.js'
+import { api } from '../api.js'
 
 export default function ProjectForm({ project, onSave, onClose }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [form, setForm] = useState({
     name:        project?.name        || '',
     description: project?.description || '',
@@ -13,6 +14,22 @@ export default function ProjectForm({ project, onSave, onClose }) {
     dueDate:     project?.dueDate     || '',
   })
   const [saving, setSaving] = useState(false)
+  const [translating, setTranslating] = useState(false)
+
+  const handleTranslate = async () => {
+    const fields = { name: form.name, goal: form.goal, description: form.description }
+    setTranslating(true)
+    try {
+      const result = await api.translateFields({ fields, lang })
+      setForm(f => ({
+        ...f,
+        name:        result.name        ?? f.name,
+        goal:        result.goal        ?? f.goal,
+        description: result.description ?? f.description,
+      }))
+    } catch {}
+    setTranslating(false)
+  }
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -33,6 +50,16 @@ export default function ProjectForm({ project, onSave, onClose }) {
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+              <button
+                type="button"
+                className="btn btn-ai btn-sm"
+                onClick={handleTranslate}
+                disabled={translating}
+              >
+                {translating ? t.translating : t.translateBtn}
+              </button>
+            </div>
             <div className="form-group">
               <label>{t.projectNameLabel}</label>
               <input value={form.name} onChange={e => set('name', e.target.value)} placeholder={t.projectNamePlaceholder} autoFocus required />

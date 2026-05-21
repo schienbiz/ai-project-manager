@@ -78,8 +78,8 @@ export default function App() {
     setTasks(prev => prev.filter(x => x.id !== id))
   }
 
-  const handleCreateNote = async (content) => {
-    const n = await api.createNote({ projectId: selectedId, content })
+  const handleCreateNote = async (content, aiExtracted = []) => {
+    const n = await api.createNote({ projectId: selectedId, content, aiExtracted })
     setNotes(prev => [n, ...prev])
     return n
   }
@@ -90,13 +90,16 @@ export default function App() {
   }
 
   const handleBulkCreateTasks = async (tasksData, projectId) => {
-    const created = []
-    for (const t of tasksData) {
-      const task = await api.createTask({ ...t, projectId })
-      created.push(task)
-    }
+    const created = await Promise.all(tasksData.map(t => api.createTask({ ...t, projectId })))
     setTasks(prev => [...prev, ...created])
     return created
+  }
+
+  const handleQuickStart = (project, tasks) => {
+    setProjects(prev => [project, ...prev])
+    setTasks(prev => [...prev, ...tasks])
+    setStats(s => s ? { ...s, totalProjects: s.totalProjects + 1, activeProjects: s.activeProjects + 1 } : s)
+    selectProject(project.id)
   }
 
   const selectedProject = projects.find(p => p.id === selectedId)
@@ -106,7 +109,7 @@ export default function App() {
 
   return (
     <LangContext.Provider value={{ lang, setLang: switchLang, t }}>
-    <div className="app">
+    <div className="app" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       <Sidebar
         projects={projects}
         selectedId={selectedId}
@@ -124,6 +127,7 @@ export default function App() {
             tasks={tasks}
             onSelectProject={selectProject}
             onNewProject={() => setShowProjectForm(true)}
+            onQuickStart={handleQuickStart}
           />
         )}
 
@@ -132,6 +136,7 @@ export default function App() {
             project={selectedProject}
             tasks={projectTasks}
             allTasks={tasks}
+            allProjects={projects}
             notes={notes}
             onUpdateProject={(data) => handleUpdateProject(selectedProject.id, data)}
             onDeleteProject={() => handleDeleteProject(selectedProject.id)}

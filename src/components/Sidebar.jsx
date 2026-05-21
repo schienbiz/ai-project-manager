@@ -49,13 +49,11 @@ export default function Sidebar({ projects, selectedId, onSelect, onDashboard, o
 
       <div className="sidebar-footer">
         <button className="btn-new" onClick={onNewProject}>{t.newProject}</button>
-        <button
-          className="btn-lang"
-          onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
-          title="Switch language / 切換語言"
-        >
-          {t.langToggle}
-        </button>
+        <div className="lang-switcher">
+          <button className={`btn-lang-opt${lang === 'en' ? ' active' : ''}`} onClick={() => setLang('en')}>EN</button>
+          <button className={`btn-lang-opt${lang === 'zh' ? ' active' : ''}`} onClick={() => setLang('zh')}>繁中</button>
+          <button className={`btn-lang-opt${lang === 'ar' ? ' active' : ''}`} onClick={() => setLang('ar')}>ع</button>
+        </div>
       </div>
     </div>
   )

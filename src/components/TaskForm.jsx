@@ -1,8 +1,11 @@
 import { useState } from 'react'
+import { api } from '../api.js'
 import { useLang } from '../i18n.js'
 
-export default function TaskForm({ task, defaultStatus, projectId, onSave, onClose }) {
-  const { t } = useLang()
+export default function TaskForm({ task, defaultStatus, projectId, projectName, onSave, onClose }) {
+  const { t, lang } = useLang()
+  const CONFIDENCE_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh }
+  const [translating, setTranslating] = useState(false)
   const [form, setForm] = useState({
     title:          task?.title          || '',
     description:    task?.description    || '',
@@ -14,8 +17,40 @@ export default function TaskForm({ task, defaultStatus, projectId, onSave, onClo
     assignee:       task?.assignee       || '',
   })
   const [saving, setSaving] = useState(false)
+  const [estimate, setEstimate] = useState(null)
+  const [estimating, setEstimating] = useState(false)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const handleTranslate = async () => {
+    const fields = { name: form.title, goal: form.description }
+    setTranslating(true)
+    try {
+      const result = await api.translateFields({ fields, lang })
+      setForm(f => ({
+        ...f,
+        title:       result.name ?? f.title,
+        description: result.goal ?? f.description,
+      }))
+    } catch {}
+    setTranslating(false)
+  }
+
+  const handleEstimate = async () => {
+    if (!form.title.trim()) return
+    setEstimating(true)
+    setEstimate(null)
+    try {
+      const result = await api.estimateTask({
+        title: form.title,
+        description: form.description,
+        projectContext: projectName || 'Software project',
+        lang,
+      })
+      setEstimate(result)
+    } catch {}
+    setEstimating(false)
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -38,6 +73,16 @@ export default function TaskForm({ task, defaultStatus, projectId, onSave, onClo
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+              <button
+                type="button"
+                className="btn btn-ai btn-sm"
+                onClick={handleTranslate}
+                disabled={translating}
+              >
+                {translating ? t.translating : t.translateBtn}
+              </button>
+            </div>
             <div className="form-group">
               <label>{t.titleLabel}</label>
               <input value={form.title} onChange={e => set('title', e.target.value)} placeholder={t.taskTitlePlaceholder} autoFocus required />
@@ -69,7 +114,18 @@ export default function TaskForm({ task, defaultStatus, projectId, onSave, onClo
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>{t.estHours}</label>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+                  <label style={{ margin: 0 }}>{t.estHours}</label>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ai"
+                    style={{ padding: '2px 8px', fontSize: 11 }}
+                    onClick={handleEstimate}
+                    disabled={estimating || !form.title.trim()}
+                  >
+                    {estimating ? t.estimating : t.aiEstimate}
+                  </button>
+                </div>
                 <input type="number" min="0" step="0.5" value={form.estimatedHours} onChange={e => set('estimatedHours', e.target.value)} placeholder={t.estHoursPlaceholder} />
               </div>
               <div className="form-group">
@@ -77,6 +133,30 @@ export default function TaskForm({ task, defaultStatus, projectId, onSave, onClo
                 <input type="number" min="0" step="0.5" value={form.actualHours} onChange={e => set('actualHours', e.target.value)} placeholder={t.actHoursPlaceholder} />
               </div>
             </div>
+
+            {estimate && (
+              <div className="estimate-result">
+                <div className="estimate-result-header">
+                  <span className="estimate-hours">{estimate.hours}h</span>
+                  <span className={`estimate-conf conf-${estimate.confidence}`}>{CONFIDENCE_LABEL[estimate.confidence] ?? estimate.confidence}</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    style={{ marginLeft: 'auto', padding: '2px 10px', fontSize: 11 }}
+                    onClick={() => { set('estimatedHours', estimate.hours); setEstimate(null) }}
+                  >
+                    {t.acceptEstimate}
+                  </button>
+                </div>
+                {estimate.rationale && <div className="estimate-rationale">{estimate.rationale}</div>}
+                {estimate.subtasks?.length > 0 && (
+                  <div className="estimate-subtasks">
+                    {estimate.subtasks.map((s, i) => <div key={i} className="estimate-subtask">• {s}</div>)}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="form-row">
               <div className="form-group">
                 <label>{t.dueDateLabel}</label>

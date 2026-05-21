@@ -1,3 +1,19 @@
+// ── SOP (auto-healing built-in) ───────────────────────────────────────────────
+// Service crash        → KeepAlive:true in plist restarts automatically
+// AI provider timeout  → multiGenerate() races all 3 providers, falls back sequentially
+// All AI providers fail → morning digest sends a plain-text summary instead
+// JSON data corruption → atomic writes (.tmp + rename) prevent partial writes
+// Silent crash         → unhandledRejection + uncaughtException log to /tmp/ai-project-manager.err
+//
+// Manual SOP (when auto-healing isn't enough):
+//  Log:       ssh chusMBp "tail -50 /tmp/ai-project-manager.log"
+//  Errors:    ssh chusMBp "tail -20 /tmp/ai-project-manager.err"
+//  Restart:   ssh chusMBp "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
+//  Status:    curl http://localhost:3004/pm/api/status
+//  Digest:    curl http://localhost:3004/pm/api/ai/digest/now
+//  Corrupt JSON: check data/*.tmp — rename to *.json to restore last good write
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { execSync } from 'child_process'
 import { fetch as undiciFetch, Agent } from 'undici'
 import express from 'express'
@@ -27,10 +43,17 @@ try {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
 
+process.on('unhandledRejection', (reason) => {
+  console.error('[ai-pm] unhandledRejection:', reason)
+})
+process.on('uncaughtException', (err) => {
+  console.error('[ai-pm] uncaughtException:', err.message, err.stack)
+})
+
 // ── AI Providers ──────────────────────────────────────────────────────────────
-// All timeouts must be < MULTI_MAX_MS (13s) so every provider can contribute
-// to synthesis within the window. Previously NVIDIA (20s) and OpenRouter (25s)
-// always lost the race and never contributed — fixed by capping them at 10s/11s.
+// Groq Llama + Cerebras + Groq Qwen3 (~8-11s each on LPU/wafer).
+// NVIDIA removed: consistently times out at 10s in practice.
+// OpenRouter removed: free tier consistently 14s, always times out.
 const PROVIDERS = [
   {
     name: 'Groq',
@@ -49,20 +72,13 @@ const PROVIDERS = [
     fetch: customFetch,
   },
   {
-    name: 'NVIDIA',
-    key: process.env.NVIDIA_API_KEY,
-    baseURL: 'https://integrate.api.nvidia.com/v1',
-    model: 'meta/llama-3.3-70b-instruct',
+    name: 'Qwen3',
+    key: process.env.GROQ_API_KEY,
+    baseURL: 'https://api.groq.com/openai/v1',
+    model: 'qwen/qwen3-32b',
     timeout: 10_000,
     fetch: customFetch,
-  },
-  {
-    name: 'OpenRouter',
-    key: process.env.OPENROUTER_API_KEY,
-    baseURL: 'https://openrouter.ai/api/v1',
-    model: 'deepseek/deepseek-v4-flash:free',
-    timeout: 11_000,
-    fetch: customFetch,
+    extraParams: { reasoning_effort: 'none' },
   },
 ]
 
@@ -88,6 +104,7 @@ async function tryProvider(p, messages, maxTokens) {
           max_tokens: maxTokens,
           temperature: 0.7,
           stream: false,
+          ...(p.extraParams || {}),
         })
         done = true
         return res.choices[0]?.message?.content?.trim() || null
@@ -195,7 +212,9 @@ function readJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf-8')) } catch { return fallback }
 }
 function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2))
+  const tmp = file + '.tmp'
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
+  fs.renameSync(tmp, file)
 }
 
 const now = () => new Date().toISOString()
@@ -222,6 +241,75 @@ app.post('/api/projects', (req, res) => {
   list.unshift(item)
   writeJSON(PROJECTS_FILE, list)
   res.json(item)
+})
+
+// Quick-start: title only → create project + AI plan + tasks in one shot (non-streaming)
+app.post('/api/projects/quick-start', async (req, res) => {
+  const title = req.body?.title?.trim()
+  const lang  = req.body?.lang
+  if (!title) return res.status(400).json({ error: 'title required' })
+
+  // 1. Create project
+  const projects = readJSON(PROJECTS_FILE, [])
+  const project = {
+    id: uid(), name: title, description: '', goal: '',
+    status: 'active', priority: 'medium',
+    startDate: null, dueDate: null, tags: [],
+    createdAt: now(), updatedAt: now(),
+  }
+  projects.unshift(project)
+  writeJSON(PROJECTS_FILE, projects)
+
+  // 2. Generate plan via multiGenerate (non-streaming, returns string)
+  const prompt = `Generate a detailed project plan as a JSON array of tasks.
+
+Project: ${title}
+Description: Not provided
+Goal: Not specified
+Due Date: Not specified
+Team Size: Not specified
+
+Return ONLY a valid JSON array. Each task object must have exactly these fields:
+- "title": string (start with an action verb, concise)
+- "description": string (1-2 sentences of context)
+- "priority": "low" | "medium" | "high" | "urgent"
+- "estimatedHours": number
+- "status": "todo"
+- "dueDate": null
+
+Generate 8-15 tasks covering the full project lifecycle in logical order. Return only the JSON array, no markdown, no explanation.`
+
+  let tasksData = []
+  try {
+    const raw = await multiGenerate([
+      { role: 'system', content: getPMSystem() + getLangDirective(lang) },
+      { role: 'user', content: prompt },
+    ], 2000)
+    const cleaned = raw?.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+    const parsed = JSON.parse(cleaned)
+    if (Array.isArray(parsed)) tasksData = parsed
+  } catch (e) {
+    console.error('[quick-start] plan parse error:', e.message)
+  }
+
+  // 3. Bulk-create tasks
+  const taskList = readJSON(TASKS_FILE, [])
+  const createdTasks = tasksData.map((t, i) => ({
+    id: uid(), projectId: project.id,
+    title: t.title || 'Untitled Task',
+    description: t.description || '',
+    status: 'todo',
+    priority: ['low','medium','high','urgent'].includes(t.priority) ? t.priority : 'medium',
+    estimatedHours: typeof t.estimatedHours === 'number' ? t.estimatedHours : null,
+    actualHours: null, dueDate: t.dueDate || null,
+    assignee: '', tags: [], sortOrder: i,
+    createdAt: now(), updatedAt: now(),
+  }))
+  taskList.push(...createdTasks)
+  writeJSON(TASKS_FILE, taskList)
+
+  console.log(`[quick-start] "${title}" → ${createdTasks.length} tasks`)
+  res.json({ project, tasks: createdTasks })
 })
 
 app.get('/api/projects/:id', (req, res) => {
@@ -351,11 +439,22 @@ app.get('/api/dashboard', (req, res) => {
 })
 
 // ── AI system prompt ──────────────────────────────────────────────────────────
-const PM_SYSTEM = `You are an expert AI project manager with 15 years of experience in software engineering, agile, and product strategy. You help teams plan, execute, and track projects with clarity. Be specific, actionable, and concise. Today's date: ${new Date().toISOString().split('T')[0]}.`
+// Function so date is fresh on each call (not frozen at startup).
+function getPMSystem() {
+  return `You are an expert AI project manager with 15 years of experience in software engineering, agile, and product strategy. You help teams plan, execute, and track projects with clarity. Be specific, actionable, and concise. Today's date: ${new Date().toISOString().split('T')[0]}.`
+}
+
+// Language directive appended to system prompt so AI responds in the user's selected language.
+// For JSON endpoints: values are in the target language; property keys must stay in English.
+function getLangDirective(lang) {
+  if (lang === 'zh') return ' Respond in Traditional Chinese (繁體中文). For JSON output, keep property names in English but write all string values in Traditional Chinese.'
+  if (lang === 'ar') return ' Respond in Arabic (العربية). For JSON output, keep property names in English but write all string values in Arabic.'
+  return ''
+}
 
 // Generate full project plan as JSON task array
 app.post('/api/ai/generate-plan', async (req, res) => {
-  const { projectName, description, goal, dueDate, teamSize } = req.body
+  const { projectName, description, goal, dueDate, teamSize, lang } = req.body
   const prompt = `Generate a detailed project plan as a JSON array of tasks.
 
 Project: ${projectName}
@@ -374,12 +473,12 @@ Return ONLY a valid JSON array. Each task object must have exactly these fields:
 
 Generate 8-15 tasks covering the full project lifecycle in logical order. Return only the JSON array, no markdown, no explanation.`
 
-  await streamGenerate(res, PM_SYSTEM, prompt, 2000)
+  await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 2000)
 })
 
 // Daily standup summary
 app.post('/api/ai/standup', async (req, res) => {
-  const { project, tasks } = req.body
+  const { project, tasks, lang } = req.body
   const done       = tasks.filter(t => t.status === 'done').map(t => t.title)
   const inProgress = tasks.filter(t => t.status === 'in_progress').map(t => t.title)
   const blocked    = tasks.filter(t => t.status === 'blocked').map(t => t.title)
@@ -402,12 +501,12 @@ Format:
 **Blockers:** [blockers or "None"]
 **Overall Status:** [On Track / At Risk / Delayed] — [one sentence]`
 
-  await streamGenerate(res, PM_SYSTEM, prompt, 400)
+  await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 400)
 })
 
 // Risk analysis
 app.post('/api/ai/risks', async (req, res) => {
-  const { project, tasks } = req.body
+  const { project, tasks, lang } = req.body
   const today   = new Date().toISOString().split('T')[0]
   const overdue = tasks.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done')
   const blocked = tasks.filter(t => t.status === 'blocked')
@@ -431,12 +530,12 @@ Provide:
 **Immediate Actions:** (3-5 concrete steps to take this week)
 **Timeline Assessment:** Will this project meet its deadline?`
 
-  await streamGenerate(res, PM_SYSTEM, prompt, 700)
+  await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 700)
 })
 
 // Weekly report across all projects
 app.post('/api/ai/weekly-report', async (req, res) => {
-  const { projects, tasks } = req.body
+  const { projects, tasks, lang } = req.body
   const today = new Date().toISOString().split('T')[0]
 
   const summaries = projects.map(p => {
@@ -461,12 +560,12 @@ Write a professional weekly report:
 **Risks & Blockers**
 **Next Week Priorities**`
 
-  await streamGenerate(res, PM_SYSTEM, prompt, 1200)
+  await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 1200)
 })
 
 // Parse meeting notes → extract tasks as JSON
 app.post('/api/ai/parse-notes', async (req, res) => {
-  const { content, projectName } = req.body
+  const { content, projectName, lang } = req.body
 
   const prompt = `Extract all action items from these meeting notes as a JSON array.
 
@@ -486,15 +585,35 @@ Return ONLY a valid JSON array. Each item must have:
 
 Extract every concrete action, decision, or commitment. Return only the JSON array.`
 
-  await streamGenerate(res, PM_SYSTEM, prompt, 1500)
+  await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 1500)
+})
+
+// Translate project fields to target language (non-streaming JSON)
+app.post('/api/ai/translate-fields', async (req, res) => {
+  const { fields, lang } = req.body
+  const langName = lang === 'zh' ? 'Traditional Chinese (繁體中文)' : lang === 'ar' ? 'Arabic (العربية)' : 'English'
+  try {
+    const text = await multiGenerate([
+      { role: 'system', content: 'You are a professional translator. Translate only the values, not the keys. Keep proper nouns and brand names as-is unless they have a standard translation.' },
+      { role: 'user', content: `Translate these project fields to ${langName}. Return ONLY a JSON object with the same keys.
+
+${JSON.stringify(fields, null, 2)}
+
+Return only valid JSON, no markdown, no explanation.` },
+    ], 400)
+    const match = text.match(/\{[\s\S]*\}/)
+    res.json(match ? JSON.parse(match[0]) : fields)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // Quick task estimation (non-streaming JSON)
 app.post('/api/ai/estimate', async (req, res) => {
-  const { title, description, projectContext } = req.body
+  const { title, description, projectContext, lang } = req.body
   try {
     const text = await multiGenerate([
-      { role: 'system', content: PM_SYSTEM },
+      { role: 'system', content: getPMSystem() + getLangDirective(lang) },
       { role: 'user', content: `Estimate the effort for this task. Return ONLY a JSON object:
 {
   "hours": number,
@@ -517,6 +636,126 @@ Return only JSON.` },
   }
 })
 
+// Global risk scan across all projects
+app.post('/api/ai/global-risks', async (req, res) => {
+  const { projects, tasks, lang } = req.body
+  const today = new Date().toISOString().split('T')[0]
+
+  const summaries = projects.map(p => {
+    const pt = tasks.filter(t => t.projectId === p.id)
+    const overdue = pt.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done')
+    const blocked = pt.filter(t => t.status === 'blocked')
+    const done = pt.filter(t => t.status === 'done').length
+    return `**${p.name}** [${p.status}] ${done}/${pt.length} done, due ${p.dueDate || 'N/A'}
+Overdue: ${overdue.map(t => t.title).join(', ') || 'None'}
+Blocked: ${blocked.map(t => t.title).join(', ') || 'None'}`
+  }).join('\n\n')
+
+  const prompt = `Perform a risk scan across all projects.
+
+Today: ${today}
+
+${summaries || 'No projects'}
+
+Provide:
+**Overall Health:** Green / Yellow / Red — one sentence
+**Critical Issues:** (top 3 risks or blockers across all projects, with project name)
+**Per-Project Status:** (one bullet per project with emoji health indicator)
+**This Week's Priorities:** (3–5 concrete cross-project actions)`
+
+  await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 800)
+})
+
+// ── Morning digest ────────────────────────────────────────────────────────────
+let _lastDigestAt = null
+
+async function sendMorningDigest() {
+  const botToken = process.env.BOT_TOKEN
+  const chatId   = process.env.OWNER_TELEGRAM_ID
+  if (!botToken || !chatId) { console.warn('[digest] BOT_TOKEN or OWNER_TELEGRAM_ID not set'); return }
+
+  const projects = readJSON(PROJECTS_FILE, []).filter(p => p.status === 'active')
+  if (!projects.length) { console.log('[digest] no active projects, skipping'); return }
+
+  const allTasks = readJSON(TASKS_FILE, [])
+  const today = new Date().toISOString().split('T')[0]
+
+  const summaries = projects.map(p => {
+    const pt = allTasks.filter(t => t.projectId === p.id)
+    const ip = pt.filter(t => t.status === 'in_progress').map(t => t.title)
+    const bl = pt.filter(t => t.status === 'blocked').map(t => t.title)
+    const od = pt.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done').map(t => t.title)
+    const td = pt.filter(t => t.status === 'todo').slice(0, 3).map(t => t.title)
+    const done = pt.filter(t => t.status === 'done').length
+    return `Project: ${p.name} (${done}/${pt.length} done${p.dueDate ? ', due ' + p.dueDate : ''})
+In Progress: ${ip.join(', ') || 'none'}
+Blocked: ${bl.join(', ') || 'none'}
+Overdue: ${od.join(', ') || 'none'}
+Next Up: ${td.join(', ') || 'none'}`
+  }).join('\n\n')
+
+  const prompt = `Write a tight morning digest for these active projects. One section per project (max 3 bullets each). End with a single "🎯 Today's focus:" line across all projects.
+
+${summaries}
+
+Rules:
+- Telegram markdown: *bold* for project names, • for bullets
+- Each bullet is one concrete action or key status
+- Prefix blocked items with ⚠️, overdue with 🔴
+- Under 200 words total`
+
+  let text
+  try {
+    text = await multiGenerate([
+      { role: 'system', content: getPMSystem() },
+      { role: 'user', content: prompt },
+    ], 500)
+  } catch (e) {
+    console.warn('[digest] AI failed, using plain summary:', e.message)
+  }
+  if (!text) {
+    text = projects.map(p => {
+      const pt = allTasks.filter(t => t.projectId === p.id)
+      const done = pt.filter(t => t.status === 'done').length
+      const ip = pt.filter(t => t.status === 'in_progress').length
+      const bl = pt.filter(t => t.status === 'blocked').length
+      return `• *${p.name}*: ${done}/${pt.length} done${ip ? `, ${ip} in progress` : ''}${bl ? `, ⚠️ ${bl} blocked` : ''}`
+    }).join('\n')
+  }
+
+  const dateStr = new Date().toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'long', day: 'numeric', weekday: 'short' })
+  const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}`
+
+  const r = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
+  })
+  const result = await r.json()
+  if (result.ok) { _lastDigestAt = new Date().toISOString(); console.log(`[digest] sent — ${projects.length} projects`) }
+  else console.error('[digest] Telegram error:', result.description)
+}
+
+function scheduleNextDigest() {
+  // Use Intl to correctly determine current Taipei time regardless of system timezone.
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false })
+  const parts = Object.fromEntries(f.formatToParts(new Date()).map(p => [p.type, +p.value]))
+  const elapsedSec = parts.hour * 3600 + parts.minute * 60 + parts.second
+  const untilSec = (9 * 3600 - elapsedSec + 86400) % 86400 || 86400
+  const ms = untilSec * 1000
+  console.log(`[digest] next run: 09:00 Taipei (in ${Math.floor(ms/3600000)}h ${Math.floor(ms%3600000/60000)}m)`)
+  setTimeout(async () => {
+    await sendMorningDigest().catch(e => console.error('[digest] error:', e.message))
+    scheduleNextDigest()
+  }, ms)
+}
+
+// Manual trigger for testing — GET /pm/api/ai/digest/now
+app.get('/api/ai/digest/now', async (req, res) => {
+  res.json({ ok: true, message: 'Digest sending…' })
+  await sendMorningDigest().catch(e => console.error('[digest] manual trigger error:', e.message))
+})
+
 // ── Provider status check ─────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
   res.json({
@@ -524,6 +763,7 @@ app.get('/api/status', (req, res) => {
     dataDir: DATA_DIR,
     projects: readJSON(PROJECTS_FILE, []).length,
     tasks: readJSON(TASKS_FILE, []).length,
+    lastDigestAt: _lastDigestAt,
   })
 })
 
@@ -533,9 +773,23 @@ app.get('/api/status', (req, res) => {
 if (process.env.NODE_ENV === 'production') {
   const distDir = path.join(__dirname, '../dist')
   app.get('/', (req, res) => res.redirect('/pm'))
+  // No-cache for HTML so browsers always fetch the latest bundle filename.
+  // Hashed JS/CSS assets are fine to cache (filenames change on rebuild).
+  app.use('/pm', (req, res, next) => {
+    if (!req.path || req.path === '/' || req.path.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-store')
+    }
+    next()
+  })
   app.use('/pm', express.static(distDir))
-  app.get('/pm*', (req, res) => res.sendFile(path.join(distDir, 'index.html')))
+  app.get('/pm*', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    res.sendFile(path.join(distDir, 'index.html'))
+  })
 }
 
 const PORT = process.env.PORT || 3004
-app.listen(PORT, () => console.log(`[ai-pm] started on port ${PORT}`))
+app.listen(PORT, () => {
+  console.log(`[ai-pm] started on port ${PORT}`)
+  scheduleNextDigest()
+})

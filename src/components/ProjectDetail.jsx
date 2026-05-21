@@ -18,11 +18,14 @@ function dueCls(dueDate, status) {
 }
 
 export default function ProjectDetail({
-  project, tasks, notes = [], onUpdateProject, onDeleteProject, onEditProject,
+  project, tasks, notes = [], allProjects = [], allTasks = [],
+  onUpdateProject, onDeleteProject, onEditProject,
   onCreateTask, onUpdateTask, onDeleteTask, onBulkCreateTasks,
   onCreateNote, onDeleteNote,
 }) {
   const { t } = useLang()
+  const STATUS_LABEL = { active: t.statusActive, paused: t.statusPaused, completed: t.statusCompleted, archived: t.statusArchived }
+  const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const [showAI, setShowAI] = useState(false)
   const [taskForm, setTaskForm] = useState(null)
   const [draggingId, setDraggingId] = useState(null)
@@ -59,8 +62,8 @@ export default function ProjectDetail({
         </div>
         {project.goal && <div className="project-goal">{project.goal}</div>}
         <div className="project-meta-row" style={{ marginTop: 8 }}>
-          <span className={`badge badge-${project.status}`}>{project.status}</span>
-          <span className={`badge badge-${project.priority}`}>{project.priority}</span>
+          <span className={`badge badge-${project.status}`}>{STATUS_LABEL[project.status] ?? project.status}</span>
+          <span className={`badge badge-${project.priority}`}>{PRIORITY_LABEL[project.priority] ?? project.priority}</span>
           {project.dueDate && <span className="text-muted text-sm">{t.due} {fmtDate(project.dueDate, t.dateLocale)}</span>}
           <span className="text-muted text-sm ml-auto">{t.taskCount(done, total, pct)}</span>
         </div>
@@ -96,6 +99,7 @@ export default function ProjectDetail({
                     onEdit={() => setTaskForm({ status: task.status, task })}
                     onDelete={() => onDeleteTask(task.id)}
                     onStatusChange={(status) => onUpdateTask(task.id, { status })}
+                    onQuickDone={() => onUpdateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done' })}
                   />
                 ))}
                 <button className="kanban-add" onClick={() => setTaskForm({ status: col.key })}>
@@ -114,6 +118,7 @@ export default function ProjectDetail({
           task={taskForm.task}
           defaultStatus={taskForm.status}
           projectId={project.id}
+          projectName={project.name}
           onSave={async (data) => {
             if (taskForm.task) {
               await onUpdateTask(taskForm.task.id, data)
@@ -130,8 +135,11 @@ export default function ProjectDetail({
         <AIPanel
           project={project}
           tasks={tasks}
+          allProjects={allProjects}
+          allTasks={allTasks}
           onClose={() => setShowAI(false)}
           onApplyTasks={onBulkCreateTasks}
+          onCreateNote={onCreateNote}
         />
       )}
     </div>
@@ -209,21 +217,35 @@ function NoteCard({ note, onDelete }) {
   )
 }
 
-function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete }) {
+function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone }) {
   const { t } = useLang()
+  const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const cls = dueCls(task.dueDate, task.status)
+  const isDone = task.status === 'done'
 
   return (
     <div
-      className={`task-card${isDragging ? ' dragging' : ''}`}
+      className={`task-card${isDragging ? ' dragging' : ''}${isDone ? ' task-done' : ''}`}
       draggable
       onDragStart={onDragStart}
     >
-      <div className="task-title">{task.title}</div>
+      <div className="task-card-top">
+        <div
+          className={`task-done-check${isDone ? ' checked' : ''}`}
+          onClick={(e) => { e.stopPropagation(); onQuickDone() }}
+          title={isDone ? t.quickReopenLabel : t.quickDoneLabel}
+        />
+        <div className="task-title">{task.title}</div>
+      </div>
       {task.description && <div className="task-desc">{task.description.slice(0, 80)}{task.description.length > 80 ? '…' : ''}</div>}
       <div className="task-meta">
-        <span className={`badge badge-${task.priority}`}>{task.priority}</span>
-        {task.estimatedHours && <span className="task-hours">{task.estimatedHours}h</span>}
+        <span className={`badge badge-${task.priority}`}>{PRIORITY_LABEL[task.priority] ?? task.priority}</span>
+        {isDone && task.actualHours
+          ? <span className="task-hours task-actual">{task.actualHours}h ✓</span>
+          : task.estimatedHours
+            ? <span className="task-hours">{task.estimatedHours}h</span>
+            : null
+        }
         {task.dueDate && <span className={`task-due ${cls}`}>{fmtDate(task.dueDate, t.dateLocale)}</span>}
         {task.assignee && <span className="text-muted text-sm">{task.assignee}</span>}
       </div>

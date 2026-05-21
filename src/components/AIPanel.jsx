@@ -2,8 +2,9 @@ import { useState, useRef } from 'react'
 import { streamAI } from '../api.js'
 import { useLang } from '../i18n.js'
 
-export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
-  const { t } = useLang()
+export default function AIPanel({ project, tasks, allProjects, allTasks, onClose, onApplyTasks, onCreateNote }) {
+  const { t, lang } = useLang()
+  const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const TABS = [
     { key: 'plan',    label: t.tabPlan },
     { key: 'standup', label: t.tabStandup },
@@ -48,7 +49,7 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
           } catch {}
         }
       },
-      (err) => { setStreaming(false); setOutput('Error: ' + err) }
+      (err) => { setStreaming(false); setOutput(t.aiError + err) }
     )
   }
 
@@ -60,16 +61,21 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
         goal: project.goal,
         dueDate: planOpts.dueDate,
         teamSize: planOpts.teamSize,
+        lang,
       })
     } else if (tab === 'standup') {
-      run('/pm/api/ai/standup', { project, tasks })
+      run('/pm/api/ai/standup', { project, tasks, lang })
     } else if (tab === 'risks') {
-      run('/pm/api/ai/risks', { project, tasks })
+      run('/pm/api/ai/risks', { project, tasks, lang })
     } else if (tab === 'report') {
-      run('/pm/api/ai/weekly-report', { projects: [project], tasks })
+      run('/pm/api/ai/weekly-report', {
+        projects: allProjects?.length ? allProjects : [project],
+        tasks: allTasks?.length ? allTasks : tasks,
+        lang,
+      })
     } else if (tab === 'notes') {
       if (!notesText.trim()) return
-      run('/pm/api/ai/parse-notes', { content: notesText, projectName: project.name })
+      run('/pm/api/ai/parse-notes', { content: notesText, projectName: project.name, lang })
     }
   }
 
@@ -77,6 +83,10 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
     if (!parsedTasks?.length) return
     setApplying(true)
     await onApplyTasks(parsedTasks)
+    // Auto-save the source notes with extracted actions when parsing notes
+    if (tab === 'notes' && notesText.trim() && onCreateNote) {
+      await onCreateNote(notesText, parsedTasks.map(tk => tk.title))
+    }
     setApplying(false)
     setParsedTasks(null)
     setOutput(prev => prev + t.appliedMsg(parsedTasks.length))
@@ -153,6 +163,12 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
             </div>
           )}
 
+          {tab === 'report' && allProjects?.length > 1 && (
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              {t.allProjectsReportInfo(allProjects.length)}
+            </div>
+          )}
+
           <button className="btn btn-ai" onClick={handleRun} disabled={streaming}>
             {streaming ? t.thinking : t.run}
           </button>
@@ -174,7 +190,7 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
               </div>
               {parsedTasks.slice(0, 5).map((tk, i) => (
                 <div key={i} className="task-preview-item">
-                  <span className={`badge badge-${tk.priority}`}>{tk.priority}</span>
+                  <span className={`badge badge-${tk.priority}`}>{PRIORITY_LABEL[tk.priority] ?? tk.priority}</span>
                   <span>{tk.title}</span>
                   {tk.estimatedHours && <span className="text-muted text-sm ml-auto">{tk.estimatedHours}h</span>}
                 </div>
@@ -193,16 +209,41 @@ export default function AIPanel({ project, tasks, onClose, onApplyTasks }) {
   )
 }
 
-function OutputText({ text, streaming }) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+function renderInline(text) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+  return parts.map((p, i) => {
+    if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return <strong key={i}>{p.slice(2, -2)}</strong>
+    if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return <code key={i} className="md-code">{p.slice(1, -1)}</code>
+    return p
+  })
+}
+
+export function OutputText({ text, streaming }) {
+  const lines = text.split('\n')
   return (
-    <span>
-      {parts.map((p, i) =>
-        p.startsWith('**') && p.endsWith('**')
-          ? <strong key={i}>{p.slice(2, -2)}</strong>
-          : <span key={i}>{p}</span>
-      )}
-      {streaming && <span className="ai-streaming"> ▌</span>}
-    </span>
+    <div>
+      {lines.map((line, i) => {
+        const isLast = i === lines.length - 1
+        const cursor = isLast && streaming ? <span className="ai-streaming"> ▌</span> : null
+
+        if (line.startsWith('### ')) return <h5 key={i} className="md-h3">{renderInline(line.slice(4))}{cursor}</h5>
+        if (line.startsWith('## ')) return <h4 key={i} className="md-h2">{renderInline(line.slice(3))}{cursor}</h4>
+        if (line.startsWith('# ')) return <h3 key={i} className="md-h1">{renderInline(line.slice(2))}{cursor}</h3>
+        if (/^[-*] /.test(line)) return (
+          <div key={i} className="md-li">
+            <span className="md-bullet">•</span>
+            <span>{renderInline(line.slice(2))}{cursor}</span>
+          </div>
+        )
+        if (/^\d+\. /.test(line)) return (
+          <div key={i} className="md-li">
+            <span className="md-bullet">{line.match(/^\d+/)[0]}.</span>
+            <span>{renderInline(line.replace(/^\d+\. /, ''))}{cursor}</span>
+          </div>
+        )
+        if (!line.trim()) return <div key={i} className="md-gap" />
+        return <div key={i} className="md-p">{renderInline(line)}{cursor}</div>
+      })}
+    </div>
   )
 }

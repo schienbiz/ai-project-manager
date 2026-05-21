@@ -9,6 +9,7 @@ export const api = {
   getProjects:     () => fetch('/pm/api/projects').then(json),
   getProject:      (id) => fetch(`/pm/api/projects/${id}`).then(json),
   createProject:   (data) => post('/pm/api/projects', data),
+  quickStart:      (title, lang) => post('/pm/api/projects/quick-start', { title, lang }),
   updateProject:   (id, data) => put(`/pm/api/projects/${id}`, data),
   deleteProject:   (id) => del(`/pm/api/projects/${id}`),
 
@@ -23,6 +24,10 @@ export const api = {
   getNotes:        (projectId) => fetch(`/pm/api/notes?projectId=${projectId}`).then(json),
   createNote:      (data) => post('/pm/api/notes', data),
   deleteNote:      (id) => del(`/pm/api/notes/${id}`),
+
+  // AI helpers
+  estimateTask:     (data) => post('/pm/api/ai/estimate', data),
+  translateFields:  (data) => post('/pm/api/ai/translate-fields', data),
 }
 
 function post(url, data) {
