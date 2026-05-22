@@ -408,9 +408,10 @@ app.put('/api/tasks/bulk', (req, res) => {
 
 // Background agent: same logic as /agent-run but collects output → writes to JSON
 async function runAgentBackground(taskId, projectId, lang) {
+  let task, project
   try {
-    const task    = readJSON(TASKS_FILE, []).find(t => t.id === taskId)
-    const project = readJSON(PROJECTS_FILE, []).find(p => p.id === projectId)
+    task    = readJSON(TASKS_FILE, []).find(t => t.id === taskId)
+    project = readJSON(PROJECTS_FILE, []).find(p => p.id === projectId)
     if (!task || !project) return
 
     const projectTasks = readJSON(TASKS_FILE, []).filter(t => t.projectId === projectId)
