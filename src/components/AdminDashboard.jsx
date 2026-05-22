@@ -104,13 +104,13 @@ export default function AdminDashboard({ onBack }) {
                 </div>
               ))}
 
-              {/* ATung Syncthing (read-only) */}
-              <div className={`admin-service-card ${data.syncthing.healthy ? 'healthy' : 'unhealthy'}`}>
+              {/* ATung Syncthing — monitored locally by ATung watchdog, not reachable from chusMBp */}
+              <div className="admin-service-card" style={{ borderLeft: '3px solid #58a6ff', opacity: .8 }}>
                 <div className="admin-svc-left">
-                  <span className={`admin-dot ${data.syncthing.healthy ? 'dot-ok' : 'dot-err'}`} />
+                  <span className="admin-dot" style={{ background: '#58a6ff' }} />
                   <div>
                     <div className="admin-svc-name">ATung Syncthing</div>
-                    <div className="admin-svc-meta">:8384 · {data.syncthing.healthy ? 'pong' : 'unreachable'}</div>
+                    <div className="admin-svc-meta">monitored by ATung watchdog · Telegram alerts on failure</div>
                   </div>
                 </div>
                 <span className="admin-svc-meta" style={{ paddingRight: 8 }}>ATung</span>

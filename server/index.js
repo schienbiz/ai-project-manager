@@ -1062,15 +1062,9 @@ app.get('/api/admin/status', async (req, res) => {
   let watchdogLine = 'no log'
   try { watchdogLine = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').pop() } catch {}
 
-  // ATung Syncthing check via Tailscale
-  let syncthingOk = null
-  try {
-    const r = await Promise.race([
-      fetch('http://100.104.4.16:8384/rest/system/ping', { headers: { 'X-API-Key': 'JHPURzgxjGsAmbv5mgRACvL2WYxFHPRW' } }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
-    ])
-    syncthingOk = r.ok
-  } catch { syncthingOk = false }
+  // ATung Syncthing binds to 127.0.0.1 — not reachable from chusMBp over Tailscale.
+  // ATung watchdog monitors it locally every 5 min and alerts via Telegram on failure.
+  const syncthingOk = null  // null = monitored externally, not directly checkable
 
   const ts = Date.now()
   res.json({
