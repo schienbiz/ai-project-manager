@@ -102,7 +102,7 @@ function isCoolingDown(name) {
 function setCooldown(name, ms = 60_000) {
   _cooldown[name] = Date.now() + ms
   const until = new Date(Date.now() + ms).toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei' })
-  console.warn(`[circuit] ${name} rate-limited (429) — cooldown ${ms / 1000}s, resumes ${until} Taipei`)
+  console.log(`[circuit] ${name} rate-limited (429) — cooldown ${ms / 1000}s, resumes ${until} Taipei`)
 }
 
 async function tryProvider(p, messages, maxTokens, _isRetry = false) {
@@ -1011,8 +1011,19 @@ app.get('/api/ai/digest/now', async (req, res) => {
 
 // ── Provider status check ─────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
+  const now = Date.now()
   res.json({
-    providers: PROVIDERS.map(p => ({ name: p.name, configured: !!p.key, model: p.model })),
+    providers: PROVIDERS.map(p => {
+      const coolUntil = _cooldown[p.name]
+      const coolingDown = !!(coolUntil && now < coolUntil)
+      return {
+        name: p.name,
+        configured: !!p.key,
+        model: p.model,
+        coolingDown,
+        cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null,
+      }
+    }),
     dataDir: DATA_DIR,
     projects: readJSON(PROJECTS_FILE, []).length,
     tasks: readJSON(TASKS_FILE, []).length,
