@@ -1,9 +1,12 @@
 // ── SOP (auto-healing built-in) ───────────────────────────────────────────────
 // Service crash        → KeepAlive:true in plist restarts automatically
 // AI provider timeout  → multiGenerate() races all 3 providers, falls back sequentially
+// AI provider 429      → circuit breaker skips that provider for 60s, auto-recovers
+// AI provider 413      → tryProvider() auto-truncates user message by 50% and retries once
 // All AI providers fail → morning digest sends a plain-text summary instead
 // JSON data corruption → atomic writes (.tmp + rename) prevent partial writes
 // Silent crash         → unhandledRejection + uncaughtException log to /tmp/ai-project-manager.err
+// Agent error          → click ⚠️ badge to retry; calls POST /api/tasks/:id/agent/retry
 //
 // Manual SOP (when auto-healing isn't enough):
 //  Log:       ssh chusMBp "tail -50 /tmp/ai-project-manager.log"
@@ -91,8 +94,23 @@ function makeClient(p) {
   })
 }
 
-async function tryProvider(p, messages, maxTokens) {
+// Circuit breaker: per-provider 429 cooldown (auto-heals after 60s)
+const _cooldown = {}
+function isCoolingDown(name) {
+  return _cooldown[name] && Date.now() < _cooldown[name]
+}
+function setCooldown(name, ms = 60_000) {
+  _cooldown[name] = Date.now() + ms
+  const until = new Date(Date.now() + ms).toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei' })
+  console.warn(`[circuit] ${name} rate-limited (429) — cooldown ${ms / 1000}s, resumes ${until} Taipei`)
+}
+
+async function tryProvider(p, messages, maxTokens, _isRetry = false) {
   if (!p.key) return null
+  if (isCoolingDown(p.name)) {
+    console.log(`[circuit] ${p.name} skipped — cooling down`)
+    return null
+  }
   const client = makeClient(p)
   let done = false
   try {
@@ -116,7 +134,20 @@ async function tryProvider(p, messages, maxTokens) {
     ])
   } catch (err) {
     done = true
-    console.warn(`[ai] ${p.name} failed: ${err.message?.slice(0, 80)}`)
+    const is429 = err.status === 429 || err.message?.includes('429')
+    const is413 = err.status === 413 || err.message?.includes('413') || err.message?.includes('too large')
+    if (is429) {
+      setCooldown(p.name, 60_000)
+    } else if (is413 && !_isRetry) {
+      // Auto-truncate: halve the user message and retry once
+      const truncated = messages.map(m =>
+        m.role === 'user' ? { ...m, content: m.content.slice(0, Math.floor(m.content.length / 2)) } : m
+      )
+      console.warn(`[ai] ${p.name} 413 — retrying with truncated context (${truncated.find(m => m.role === 'user')?.content.length} chars)`)
+      return tryProvider(p, truncated, maxTokens, true)
+    } else {
+      console.warn(`[ai] ${p.name} failed: ${err.message?.slice(0, 80)}`)
+    }
     return null
   }
 }

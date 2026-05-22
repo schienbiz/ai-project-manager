@@ -105,14 +105,38 @@ cat ~/CloudSync/ai-project-manager/data/digest-state.json
 
 ---
 
-## 6. OpenRouter 429 Rate Limit
+## 6. AI Provider 429 Rate Limit (Groq / Cerebras / OpenRouter)
 
-**Behavior:** Circuit breaker trips automatically, blocks OpenRouter 1h, auto-recovers.
-App falls back to Groq/Cerebras/Nvidia — users unaffected.
+**Auto-heal:** Circuit breaker trips automatically per-provider, blocks that provider for 60s, auto-recovers. Other providers continue serving. Users unaffected unless all 3 providers are simultaneously rate-limited.
 
-**Log:** `[circuit] openrouter.ai rate-limited (429) — cooldown 1h until HH:MM:SS`
+**Log pattern:**
+```
+[circuit] Groq rate-limited (429) — cooldown 60s, resumes HH:MM Taipei
+[circuit] Groq skipped — cooling down
+```
 
-This is expected on free tier. Not an error requiring action.
+After 60s the provider is automatically re-enabled on the next request. No manual action needed.
+
+**If all 3 providers are simultaneously rate-limited:**
+```bash
+# Check which are cooling down (in-memory, resets on restart)
+tail -20 /tmp/ai-project-manager.log | grep circuit
+# Wait 60s or restart service to clear cooldowns instantly:
+launchctl kickstart -k gui/501/com.ai-project-manager.dev
+```
+
+---
+
+## 6b. AI Provider 413 Request Too Large (Qwen3)
+
+**Auto-heal:** `tryProvider()` detects 413, halves the user message, and retries once automatically. No manual action needed.
+
+**Log pattern:**
+```
+[ai] Qwen3 413 — retrying with truncated context (N chars)
+```
+
+If truncated context still fails (413 on retry), Qwen3 is skipped and the other 2 providers handle it.
 
 ---
 
