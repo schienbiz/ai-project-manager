@@ -1031,6 +1031,74 @@ app.get('/api/status', (req, res) => {
   })
 })
 
+// ── Admin ─────────────────────────────────────────────────────────────────────
+const ADMIN_SERVICES = [
+  { name: 'Relationship OS',  label: 'com.relationship-os.dev',    port: 3000, path: '/health' },
+  { name: 'Marketing Asst',   label: 'com.marketing-assistant.dev', port: 3001, path: '/' },
+  { name: 'Proxy',            label: 'com.proxy.marketing',         port: 3002, path: '/' },
+  { name: 'AI Learning Tool', label: 'com.ai-learning-tool.dev',    port: 3003, path: '/health' },
+  { name: 'AI PM',            label: 'com.ai-project-manager.dev',  port: 3004, path: '/pm/api/status' },
+]
+
+const ALLOWED_LABELS = new Set(ADMIN_SERVICES.map(s => s.label))
+
+app.get('/api/admin/status', async (req, res) => {
+  const checks = ADMIN_SERVICES.map(async (svc) => {
+    const t0 = Date.now()
+    try {
+      const r = await Promise.race([
+        fetch(`http://localhost:${svc.port}${svc.path}`),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+      ])
+      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 400 }
+    } catch {
+      return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
+    }
+  })
+
+  const services = await Promise.all(checks)
+
+  // Watchdog last line
+  let watchdogLine = 'no log'
+  try { watchdogLine = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').pop() } catch {}
+
+  // ATung watchdog via Syncthing API check (best-effort)
+  let syncthingOk = null
+  try {
+    const r = await Promise.race([
+      fetch('http://localhost:8384/rest/system/ping', { headers: { 'X-API-Key': 'JHPURzgxjGsAmbv5mgRACvL2WYxFHPRW' } }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+    ])
+    syncthingOk = r.ok
+  } catch { syncthingOk = false }
+
+  const ts = Date.now()
+  res.json({
+    services,
+    providers: PROVIDERS.map(p => {
+      const coolUntil = _cooldown[p.name]
+      const coolingDown = !!(coolUntil && ts < coolUntil)
+      return { name: p.name, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null }
+    }),
+    watchdog: { lastLine: watchdogLine },
+    syncthing: { healthy: syncthingOk },
+    digest: { lastDigestAt: _lastDigestAt },
+    checkedAt: new Date().toISOString(),
+  })
+})
+
+app.post('/api/admin/restart', (req, res) => {
+  const { label } = req.body
+  if (!label || !ALLOWED_LABELS.has(label)) return res.status(400).json({ error: 'Invalid label' })
+  try {
+    execSync(`launchctl kickstart -k gui/501/${label}`, { timeout: 5000 })
+    console.log(`[admin] restarted ${label}`)
+    res.json({ ok: true, label })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Frontend (production) ─────────────────────────────────────────────────────
 // Served under /pm so proxy route { prefix: '/pm', target: 3004 } (no strip) works.
 // Direct access: http://host:3004/ redirects to /pm

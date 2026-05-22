@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import ProjectDetail from './components/ProjectDetail.jsx'
 import ProjectForm from './components/ProjectForm.jsx'
+import AdminDashboard from './components/AdminDashboard.jsx'
 
 export default function App() {
   const [lang, setLang] = useState(() => localStorage.getItem('lang') || 'en')
@@ -132,11 +133,16 @@ export default function App() {
         selectedId={selectedId}
         onSelect={selectProject}
         onDashboard={() => setView('dashboard')}
+        onAdmin={() => setView('admin')}
         onNewProject={() => { setEditingProject(null); setShowProjectForm(true) }}
         view={view}
       />
 
       <div className="main">
+        {view === 'admin' && (
+          <AdminDashboard onBack={() => setView('dashboard')} />
+        )}
+
         {view === 'dashboard' && (
           <Dashboard
             stats={stats}

@@ -26,6 +26,10 @@ export const api = {
   createNote:      (data) => post('/pm/api/notes', data),
   deleteNote:      (id) => del(`/pm/api/notes/${id}`),
 
+  // Admin
+  getAdminStatus:  () => fetch('/pm/api/admin/status').then(json),
+  restartService:  (label) => post('/pm/api/admin/restart', { label }),
+
   // AI helpers
   estimateTask:     (data) => post('/pm/api/ai/estimate', data),
   translateFields:  (data) => post('/pm/api/ai/translate-fields', data),

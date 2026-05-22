@@ -304,3 +304,34 @@ body {
 .agent-badge-saved    { background: rgba(88,166,255,.15); color: #58a6ff; }
 .agent-badge-running  { background: rgba(251,191,36,.18); color: #f59e0b; animation: agent-pulse 1.2s ease infinite; }
 .agent-badge-error    { background: rgba(248,81,73,.18);  color: #f85149; }
+
+/* ── Admin Dashboard ── */
+.admin-dashboard { display: flex; flex-direction: column; height: 100%; overflow-y: auto; }
+.admin-header { padding: 20px 24px 0; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+.admin-title-row { display: flex; align-items: center; gap: 12px; }
+.admin-title-row h2 { flex: 1; font-size: 18px; }
+.admin-refresh-info { font-size: 12px; color: var(--muted); }
+.admin-loading { padding: 32px 24px; color: var(--muted); }
+.admin-error { padding: 12px 24px; color: var(--danger); font-size: 13px; }
+.admin-body { padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+.admin-section { display: flex; flex-direction: column; gap: 8px; }
+.admin-section-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.admin-service-grid { display: flex; flex-direction: column; gap: 6px; }
+.admin-service-card { display: flex; align-items: center; justify-content: space-between; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; transition: border-color .15s; }
+.admin-service-card.healthy   { border-left: 3px solid #3fb950; }
+.admin-service-card.unhealthy { border-left: 3px solid var(--danger); }
+.admin-svc-left { display: flex; align-items: center; gap: 10px; }
+.admin-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-ok   { background: #3fb950; }
+.dot-err  { background: var(--danger); }
+.dot-warn { background: #f59e0b; }
+.admin-svc-name { font-size: 13px; font-weight: 500; color: var(--text); }
+.admin-svc-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.admin-cooldown { color: var(--danger); }
+.admin-provider-grid { display: flex; flex-direction: column; gap: 6px; }
+.admin-provider-card { display: flex; align-items: center; gap: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+.admin-provider-card.cooling { border-left: 3px solid var(--danger); }
+.admin-provider-card.ready   { border-left: 3px solid #3fb950; }
+.admin-bottom-row { display: flex; gap: 16px; }
+.admin-section-half { flex: 1; }
+.admin-info-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }

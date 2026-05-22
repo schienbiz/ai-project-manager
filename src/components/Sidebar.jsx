@@ -2,7 +2,7 @@ import { useLang } from '../i18n.js'
 
 const STATUS_DOT = { active: 'dot-active', paused: 'dot-paused', completed: 'dot-completed', archived: 'dot-archived' }
 
-export default function Sidebar({ projects, selectedId, onSelect, onDashboard, onNewProject, view }) {
+export default function Sidebar({ projects, selectedId, onSelect, onDashboard, onAdmin, onNewProject, view }) {
   const { lang, setLang, t } = useLang()
   const active   = projects.filter(p => p.status === 'active')
   const inactive = projects.filter(p => p.status !== 'active')
@@ -20,6 +20,13 @@ export default function Sidebar({ projects, selectedId, onSelect, onDashboard, o
         >
           <span style={{ fontSize: 14 }}>🏠</span>
           <span className="name">{t.dashboard}</span>
+        </div>
+        <div
+          className={`sidebar-item ${view === 'admin' ? 'active' : ''}`}
+          onClick={onAdmin}
+        >
+          <span style={{ fontSize: 14 }}>⚙️</span>
+          <span className="name">System Admin</span>
         </div>
 
         {active.length > 0 && (
