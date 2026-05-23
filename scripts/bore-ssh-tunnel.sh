@@ -15,6 +15,9 @@ tg() {
     -d "parse_mode=Markdown" >/dev/null 2>&1
 }
 
+COOLDOWN_FILE=/tmp/bore-ssh-last-notify
+COOLDOWN_SECS=1800  # 30 minutes between Telegram notifications
+
 echo "[bore-ssh] $(date): starting bore local 22 --to bore.pub"
 > "$BORE_LOG"
 
@@ -30,15 +33,31 @@ for i in $(seq 1 30); do
   [ -n "$PORT" ] && break
 done
 
+# Check cooldown before sending Telegram
+should_notify() {
+  [ ! -f "$COOLDOWN_FILE" ] && return 0
+  LAST=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+  [ $(( $(date +%s) - LAST )) -gt $COOLDOWN_SECS ] && return 0
+  return 1
+}
+
 if [ -n "$PORT" ]; then
   echo "[bore-ssh] $(date): tunnel active at bore.pub:$PORT"
-  tg "🔑 *chusMBp SSH Fallback (bore)*
+  if should_notify; then
+    date +%s > "$COOLDOWN_FILE"
+    tg "🔑 *chusMBp SSH Fallback (bore)*
 Port changes on restart — current port:
 \`ssh -p $PORT chuchuchien0430@bore.pub\`
 _(Use when Tailscale is down)_"
+  else
+    echo "[bore-ssh] $(date): skipping Telegram (cooldown active)"
+  fi
 else
   echo "[bore-ssh] $(date): ERROR — failed to obtain port from bore.pub"
-  tg "⚠️ chusMBp bore SSH tunnel failed to start. Check /tmp/bore-ssh.log"
+  if should_notify; then
+    date +%s > "$COOLDOWN_FILE"
+    tg "⚠️ chusMBp bore SSH tunnel failed to start. Check /tmp/bore-ssh.log"
+  fi
 fi
 
 wait $BORE_PID
