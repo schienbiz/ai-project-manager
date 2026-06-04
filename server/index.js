@@ -4,7 +4,7 @@
 // AI provider 429      → circuit breaker skips that provider for 60s, auto-recovers
 // AI provider 413      → tryProvider() auto-truncates user message by 50% and retries once
 // All AI providers fail → morning digest sends a plain-text summary instead
-// JSON data corruption → atomic writes (.tmp + rename) prevent partial writes
+// DB error             → logged; routes return 500; KeepAlive restarts on crash
 // Silent crash         → unhandledRejection + uncaughtException log to /tmp/ai-project-manager.err
 // Agent error          → click ⚠️ badge to retry; calls POST /api/tasks/:id/agent/retry
 //
@@ -14,7 +14,6 @@
 //  Restart:   ssh chusMBp "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
 //  Status:    curl http://localhost:3004/pm/api/status
 //  Digest:    curl http://localhost:3004/pm/api/ai/digest/now
-//  Corrupt JSON: check data/*.tmp — rename to *.json to restore last good write
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { execSync } from 'child_process'
@@ -27,8 +26,120 @@ import { fileURLToPath } from 'url'
 import { randomUUID } from 'crypto'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import pg from 'pg'
+import { homedir } from 'os'
 
 dotenv.config()
+
+const { Pool } = pg
+
+// ── Database ──────────────────────────────────────────────────────────────────
+// Use CockroachDB CA cert if present (~/.postgresql/root.crt), otherwise fall
+// back to Node.js built-in CAs. Needed on macOS Monterey (chusMBp) whose
+// CA bundle doesn't include the intermediate used by CockroachDB Serverless.
+const _rootCrt = path.join(homedir(), '.postgresql', 'root.crt')
+const _sslOpts = fs.existsSync(_rootCrt)
+  ? { rejectUnauthorized: true, ca: fs.readFileSync(_rootCrt).toString() }
+  : { rejectUnauthorized: true }
+
+// Strip sslmode from URL — pg driver's sslmode param overrides the ssl config
+// object, preventing the ca cert from being used on macOS Monterey (chusMBp).
+const _dbUrl = new URL(process.env.DATABASE_URL)
+_dbUrl.searchParams.delete('sslmode')
+
+const pool = new Pool({
+  connectionString: _dbUrl.toString(),
+  ssl: _sslOpts,
+  max: 5,
+  idleTimeoutMillis: 30_000,
+})
+
+pool.on('error', (err) => console.error('[db] pool error:', err.message))
+
+const db = { query: (text, params) => pool.query(text, params) }
+
+async function initDb() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id UUID PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      goal TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      start_date TEXT,
+      due_date TEXT,
+      tags JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    )`)
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id UUID PRIMARY KEY,
+      project_id UUID NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'todo',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      estimated_hours NUMERIC,
+      actual_hours NUMERIC,
+      due_date TEXT,
+      assignee TEXT NOT NULL DEFAULT '',
+      tags JSONB NOT NULL DEFAULT '[]',
+      sort_order INT NOT NULL DEFAULT 0,
+      agent_type TEXT,
+      agent_status TEXT,
+      agent_output TEXT,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    )`)
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id UUID PRIMARY KEY,
+      project_id UUID NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      ai_extracted JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL
+    )`)
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS digest_state (
+      id INT PRIMARY KEY DEFAULT 1,
+      last_digest_at TIMESTAMPTZ
+    )`)
+  await db.query(`INSERT INTO digest_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING`)
+  console.log('[db] schema ready')
+}
+
+// ── Row mappers (snake_case DB → camelCase API) ───────────────────────────────
+function rowToProject(r) {
+  return {
+    id: r.id, name: r.name, description: r.description, goal: r.goal,
+    status: r.status, priority: r.priority,
+    startDate: r.start_date, dueDate: r.due_date,
+    tags: r.tags,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  }
+}
+function rowToTask(r) {
+  return {
+    id: r.id, projectId: r.project_id,
+    title: r.title, description: r.description,
+    status: r.status, priority: r.priority,
+    estimatedHours: r.estimated_hours !== null ? Number(r.estimated_hours) : null,
+    actualHours: r.actual_hours !== null ? Number(r.actual_hours) : null,
+    dueDate: r.due_date, assignee: r.assignee, tags: r.tags,
+    sortOrder: r.sort_order,
+    agentType: r.agent_type, agentStatus: r.agent_status, agentOutput: r.agent_output,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  }
+}
+function rowToNote(r) {
+  return {
+    id: r.id, projectId: r.project_id,
+    content: r.content, aiExtracted: r.ai_extracted,
+    createdAt: r.created_at,
+  }
+}
 
 // macOS system certs fix (same pattern as other chusMBp apps)
 let customFetch
@@ -38,7 +149,7 @@ try {
     { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
   )
   if (ca.trim()) {
-    const agent = new Agent({ connect: { ca, rejectUnauthorized: false } })
+    const agent = new Agent({ connect: { ca, rejectUnauthorized: true } })
     customFetch = (url, init) => undiciFetch(url, { ...init, dispatcher: agent })
   }
 } catch {}
@@ -54,9 +165,6 @@ process.on('uncaughtException', (err) => {
 })
 
 // ── AI Providers ──────────────────────────────────────────────────────────────
-// Groq Llama + Cerebras + Groq Qwen3 (~8-11s each on LPU/wafer).
-// NVIDIA removed: consistently times out at 10s in practice.
-// OpenRouter removed: free tier consistently 14s, always times out.
 const PROVIDERS = [
   {
     name: 'Groq',
@@ -83,6 +191,14 @@ const PROVIDERS = [
     fetch: customFetch,
     extraParams: { reasoning_effort: 'none' },
   },
+  {
+    name: 'NVIDIA',
+    key: process.env.NVIDIA_API_KEY,
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+    model: 'meta/llama-3.3-70b-instruct',
+    timeout: 30_000,
+    fetch: customFetch,
+  },
 ]
 
 function makeClient(p) {
@@ -94,7 +210,6 @@ function makeClient(p) {
   })
 }
 
-// Circuit breaker: per-provider 429 cooldown (auto-heals after 60s)
 const _cooldown = {}
 function isCoolingDown(name) {
   return _cooldown[name] && Date.now() < _cooldown[name]
@@ -139,7 +254,6 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
     if (is429) {
       setCooldown(p.name, 60_000)
     } else if (is413 && !_isRetry) {
-      // Auto-truncate: halve the user message and retry once
       const truncated = messages.map(m =>
         m.role === 'user' ? { ...m, content: m.content.slice(0, Math.floor(m.content.length / 2)) } : m
       )
@@ -222,78 +336,72 @@ async function streamGenerate(res, system, userPrompt, maxTokens = 2048) {
   res.end()
 }
 
-// ── Data helpers ──────────────────────────────────────────────────────────────
+// ── Express setup ─────────────────────────────────────────────────────────────
 app.use(cors())
 app.use(express.json({ limit: '2mb' }))
 
-// Rewrite /pm/api/* → /api/* so the app works both via proxy (/pm) and direct port access
+// Rewrite /pm/api/* → /api/*
 app.use((req, res, next) => {
   if (req.url.startsWith('/pm/api/')) req.url = req.url.slice(3)
   next()
 })
 
-const DATA_DIR = path.join(__dirname, '../data')
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-
-const PROJECTS_FILE    = path.join(DATA_DIR, 'projects.json')
-const TASKS_FILE       = path.join(DATA_DIR, 'tasks.json')
-const NOTES_FILE       = path.join(DATA_DIR, 'notes.json')
-const DIGEST_STATE_FILE = path.join(DATA_DIR, 'digest-state.json')
-
-function readJSON(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf-8')) } catch { return fallback }
-}
-function writeJSON(file, data) {
-  const tmp = file + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
-  fs.renameSync(tmp, file)
-}
-
 const now = () => new Date().toISOString()
 const uid = () => randomUUID()
 
 // ── Projects ──────────────────────────────────────────────────────────────────
-app.get('/api/projects', (req, res) => res.json(readJSON(PROJECTS_FILE, [])))
-
-app.post('/api/projects', (req, res) => {
-  const list = readJSON(PROJECTS_FILE, [])
-  const item = {
-    id: uid(),
-    name: req.body.name || 'Untitled Project',
-    description: req.body.description || '',
-    goal: req.body.goal || '',
-    status: req.body.status || 'active',
-    priority: req.body.priority || 'medium',
-    startDate: req.body.startDate || null,
-    dueDate: req.body.dueDate || null,
-    tags: req.body.tags || [],
-    createdAt: now(),
-    updatedAt: now(),
-  }
-  list.unshift(item)
-  writeJSON(PROJECTS_FILE, list)
-  res.json(item)
+app.get('/api/projects', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM projects ORDER BY created_at DESC')
+    res.json(rows.map(rowToProject))
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// Quick-start: title only → create project + AI plan + tasks in one shot (non-streaming)
+app.post('/api/projects', async (req, res) => {
+  try {
+    const item = {
+      id: uid(),
+      name: req.body.name || 'Untitled Project',
+      description: req.body.description || '',
+      goal: req.body.goal || '',
+      status: req.body.status || 'active',
+      priority: req.body.priority || 'medium',
+      startDate: req.body.startDate || null,
+      dueDate: req.body.dueDate || null,
+      tags: req.body.tags || [],
+      createdAt: now(),
+      updatedAt: now(),
+    }
+    await db.query(
+      `INSERT INTO projects (id,name,description,goal,status,priority,start_date,due_date,tags,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [item.id, item.name, item.description, item.goal, item.status, item.priority,
+       item.startDate, item.dueDate, JSON.stringify(item.tags), item.createdAt, item.updatedAt]
+    )
+    res.json(item)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 app.post('/api/projects/quick-start', async (req, res) => {
   const title = req.body?.title?.trim()
   const lang  = req.body?.lang
   if (!title) return res.status(400).json({ error: 'title required' })
 
-  // 1. Create project
-  const projects = readJSON(PROJECTS_FILE, [])
-  const project = {
-    id: uid(), name: title, description: '', goal: '',
-    status: 'active', priority: 'medium',
-    startDate: null, dueDate: null, tags: [],
-    createdAt: now(), updatedAt: now(),
-  }
-  projects.unshift(project)
-  writeJSON(PROJECTS_FILE, projects)
+  try {
+    const project = {
+      id: uid(), name: title, description: '', goal: '',
+      status: 'active', priority: 'medium',
+      startDate: null, dueDate: null, tags: [],
+      createdAt: now(), updatedAt: now(),
+    }
+    await db.query(
+      `INSERT INTO projects (id,name,description,goal,status,priority,start_date,due_date,tags,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [project.id, project.name, project.description, project.goal, project.status, project.priority,
+       project.startDate, project.dueDate, JSON.stringify(project.tags), project.createdAt, project.updatedAt]
+    )
 
-  // 2. Generate plan via multiGenerate (non-streaming, returns string)
-  const prompt = `Generate a detailed project plan as a JSON array of tasks.
+    const prompt = `Generate a detailed project plan as a JSON array of tasks.
 
 Project: ${title}
 Description: Not provided
@@ -311,110 +419,158 @@ Return ONLY a valid JSON array. Each task object must have exactly these fields:
 
 Generate 8-15 tasks covering the full project lifecycle in logical order. Return only the JSON array, no markdown, no explanation.`
 
-  let tasksData = []
+    let tasksData = []
+    try {
+      const raw = await multiGenerate([
+        { role: 'system', content: getPMSystem() + getLangDirective(lang) },
+        { role: 'user', content: prompt },
+      ], 2000)
+      const cleaned = raw?.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+      const parsed = JSON.parse(cleaned)
+      if (Array.isArray(parsed)) tasksData = parsed
+    } catch (e) {
+      console.error('[quick-start] plan parse error:', e.message)
+    }
+
+    const createdTasks = []
+    for (let i = 0; i < tasksData.length; i++) {
+      const t = tasksData[i]
+      const task = {
+        id: uid(), projectId: project.id,
+        title: t.title || 'Untitled Task', description: t.description || '',
+        status: 'todo',
+        priority: ['low','medium','high','urgent'].includes(t.priority) ? t.priority : 'medium',
+        estimatedHours: typeof t.estimatedHours === 'number' ? t.estimatedHours : null,
+        actualHours: null, dueDate: t.dueDate || null,
+        assignee: '', tags: [], sortOrder: i,
+        createdAt: now(), updatedAt: now(),
+      }
+      await db.query(
+        `INSERT INTO tasks (id,project_id,title,description,status,priority,estimated_hours,actual_hours,due_date,assignee,tags,sort_order,created_at,updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [task.id, task.projectId, task.title, task.description, task.status, task.priority,
+         task.estimatedHours, task.actualHours, task.dueDate, task.assignee,
+         JSON.stringify(task.tags), task.sortOrder, task.createdAt, task.updatedAt]
+      )
+      createdTasks.push(task)
+    }
+
+    console.log(`[quick-start] "${title}" → ${createdTasks.length} tasks`)
+    res.json({ project, tasks: createdTasks })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/projects/:id', async (req, res) => {
   try {
-    const raw = await multiGenerate([
-      { role: 'system', content: getPMSystem() + getLangDirective(lang) },
-      { role: 'user', content: prompt },
-    ], 2000)
-    const cleaned = raw?.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-    const parsed = JSON.parse(cleaned)
-    if (Array.isArray(parsed)) tasksData = parsed
-  } catch (e) {
-    console.error('[quick-start] plan parse error:', e.message)
-  }
-
-  // 3. Bulk-create tasks
-  const taskList = readJSON(TASKS_FILE, [])
-  const createdTasks = tasksData.map((t, i) => ({
-    id: uid(), projectId: project.id,
-    title: t.title || 'Untitled Task',
-    description: t.description || '',
-    status: 'todo',
-    priority: ['low','medium','high','urgent'].includes(t.priority) ? t.priority : 'medium',
-    estimatedHours: typeof t.estimatedHours === 'number' ? t.estimatedHours : null,
-    actualHours: null, dueDate: t.dueDate || null,
-    assignee: '', tags: [], sortOrder: i,
-    createdAt: now(), updatedAt: now(),
-  }))
-  taskList.push(...createdTasks)
-  writeJSON(TASKS_FILE, taskList)
-
-  console.log(`[quick-start] "${title}" → ${createdTasks.length} tasks`)
-  res.json({ project, tasks: createdTasks })
+    const { rows } = await db.query('SELECT * FROM projects WHERE id=$1', [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json(rowToProject(rows[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.get('/api/projects/:id', (req, res) => {
-  const project = readJSON(PROJECTS_FILE, []).find(p => p.id === req.params.id)
-  if (!project) return res.status(404).json({ error: 'Not found' })
-  res.json(project)
+app.put('/api/projects/:id', async (req, res) => {
+  try {
+    const b = req.body
+    const { rows } = await db.query(
+      `UPDATE projects SET
+         name=$1, description=$2, goal=$3, status=$4, priority=$5,
+         start_date=$6, due_date=$7, tags=$8, updated_at=$9
+       WHERE id=$10 RETURNING *`,
+      [b.name, b.description ?? '', b.goal ?? '', b.status ?? 'active', b.priority ?? 'medium',
+       b.startDate ?? null, b.dueDate ?? null,
+       JSON.stringify(b.tags ?? []), now(), req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json(rowToProject(rows[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.put('/api/projects/:id', (req, res) => {
-  const list = readJSON(PROJECTS_FILE, [])
-  const idx = list.findIndex(p => p.id === req.params.id)
-  if (idx === -1) return res.status(404).json({ error: 'Not found' })
-  list[idx] = { ...list[idx], ...req.body, id: req.params.id, updatedAt: now() }
-  writeJSON(PROJECTS_FILE, list)
-  res.json(list[idx])
-})
-
-app.delete('/api/projects/:id', (req, res) => {
-  writeJSON(PROJECTS_FILE, readJSON(PROJECTS_FILE, []).filter(p => p.id !== req.params.id))
-  writeJSON(TASKS_FILE, readJSON(TASKS_FILE, []).filter(t => t.projectId !== req.params.id))
-  writeJSON(NOTES_FILE, readJSON(NOTES_FILE, []).filter(n => n.projectId !== req.params.id))
-  res.json({ ok: true })
+app.delete('/api/projects/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM notes WHERE project_id=$1', [req.params.id])
+    await db.query('DELETE FROM tasks WHERE project_id=$1', [req.params.id])
+    await db.query('DELETE FROM projects WHERE id=$1', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
-app.get('/api/tasks', (req, res) => {
-  const all = readJSON(TASKS_FILE, [])
-  res.json(req.query.projectId ? all.filter(t => t.projectId === req.query.projectId) : all)
+app.get('/api/tasks', async (req, res) => {
+  try {
+    const { projectId } = req.query
+    const { rows } = projectId
+      ? await db.query('SELECT * FROM tasks WHERE project_id=$1 ORDER BY sort_order ASC, created_at ASC', [projectId])
+      : await db.query('SELECT * FROM tasks ORDER BY created_at ASC')
+    res.json(rows.map(rowToTask))
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.post('/api/tasks', (req, res) => {
-  const list = readJSON(TASKS_FILE, [])
-  const item = {
-    id: uid(),
-    projectId: req.body.projectId,
-    title: req.body.title || 'Untitled Task',
-    description: req.body.description || '',
-    status: req.body.status || 'todo',
-    priority: req.body.priority || 'medium',
-    estimatedHours: req.body.estimatedHours ?? null,
-    actualHours: req.body.actualHours ?? null,
-    dueDate: req.body.dueDate || null,
-    assignee: req.body.assignee || '',
-    tags: req.body.tags || [],
-    sortOrder: list.filter(t => t.projectId === req.body.projectId).length,
-    createdAt: now(),
-    updatedAt: now(),
-  }
-  list.push(item)
-  writeJSON(TASKS_FILE, list)
-  res.json(item)
+app.post('/api/tasks', async (req, res) => {
+  try {
+    const { rows: countRows } = await db.query(
+      'SELECT COUNT(*) as cnt FROM tasks WHERE project_id=$1', [req.body.projectId]
+    )
+    const sortOrder = parseInt(countRows[0].cnt, 10)
+    const item = {
+      id: uid(), projectId: req.body.projectId,
+      title: req.body.title || 'Untitled Task',
+      description: req.body.description || '',
+      status: req.body.status || 'todo',
+      priority: req.body.priority || 'medium',
+      estimatedHours: req.body.estimatedHours ?? null,
+      actualHours: req.body.actualHours ?? null,
+      dueDate: req.body.dueDate || null,
+      assignee: req.body.assignee || '',
+      tags: req.body.tags || [],
+      sortOrder,
+      createdAt: now(), updatedAt: now(),
+    }
+    await db.query(
+      `INSERT INTO tasks (id,project_id,title,description,status,priority,estimated_hours,actual_hours,due_date,assignee,tags,sort_order,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [item.id, item.projectId, item.title, item.description, item.status, item.priority,
+       item.estimatedHours, item.actualHours, item.dueDate, item.assignee,
+       JSON.stringify(item.tags), item.sortOrder, item.createdAt, item.updatedAt]
+    )
+    res.json(item)
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.put('/api/tasks/bulk', (req, res) => {
-  const updates = req.body
-  const list = readJSON(TASKS_FILE, [])
-  for (const u of updates) {
-    const idx = list.findIndex(t => t.id === u.id)
-    if (idx !== -1) list[idx] = { ...list[idx], ...u, updatedAt: now() }
-  }
-  writeJSON(TASKS_FILE, list)
-  res.json({ ok: true })
+app.put('/api/tasks/bulk', async (req, res) => {
+  try {
+    const updates = req.body
+    for (const u of updates) {
+      await db.query(
+        `UPDATE tasks SET
+           title=COALESCE($1,title), description=COALESCE($2,description),
+           status=COALESCE($3,status), priority=COALESCE($4,priority),
+           estimated_hours=COALESCE($5,estimated_hours), actual_hours=COALESCE($6,actual_hours),
+           due_date=COALESCE($7,due_date), assignee=COALESCE($8,assignee),
+           sort_order=COALESCE($9,sort_order), agent_type=COALESCE($10,agent_type),
+           agent_status=COALESCE($11,agent_status), agent_output=COALESCE($12,agent_output),
+           updated_at=$13
+         WHERE id=$14`,
+        [u.title, u.description, u.status, u.priority,
+         u.estimatedHours, u.actualHours, u.dueDate, u.assignee,
+         u.sortOrder, u.agentType, u.agentStatus, u.agentOutput,
+         now(), u.id]
+      )
+    }
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// Background agent: same logic as /agent-run but collects output → writes to JSON
 async function runAgentBackground(taskId, projectId, lang) {
   let task, project
   try {
-    task    = readJSON(TASKS_FILE, []).find(t => t.id === taskId)
-    project = readJSON(PROJECTS_FILE, []).find(p => p.id === projectId)
-    if (!task || !project) return
+    const { rows: tr } = await db.query('SELECT * FROM tasks WHERE id=$1', [taskId])
+    const { rows: pr } = await db.query('SELECT * FROM projects WHERE id=$1', [projectId])
+    if (!tr.length || !pr.length) return
+    task = rowToTask(tr[0])
+    project = rowToProject(pr[0])
 
-    const projectTasks = readJSON(TASKS_FILE, []).filter(t => t.projectId === projectId)
+    const { rows: projectTaskRows } = await db.query('SELECT * FROM tasks WHERE project_id=$1', [projectId])
+    const projectTasks = projectTaskRows.map(rowToTask)
     const type = await classifyTask(task.title, task.description)
 
     let output = ''
@@ -433,128 +589,152 @@ async function runAgentBackground(taskId, projectId, lang) {
     else if (type === 'plan')     await runPlanner(task, project, lang, fakeRes)
     else                          await runWriter(task, project, projectTasks, lang, fakeRes)
 
-    const tList = readJSON(TASKS_FILE, [])
-    const idx   = tList.findIndex(t => t.id === taskId)
-    if (idx !== -1) {
-      tList[idx] = { ...tList[idx], agentType: type, agentOutput: output, agentStatus: 'saved', updatedAt: now() }
-      writeJSON(TASKS_FILE, tList)
-    }
+    await db.query(
+      'UPDATE tasks SET agent_type=$1, agent_output=$2, agent_status=$3, updated_at=$4 WHERE id=$5',
+      [type, output, 'saved', now(), taskId]
+    )
     console.log(`[agent-bg] ${type} done — "${task.title}"`)
     const typeEmoji = { research: '🔍', write: '✍️', plan: '🗺️' }[type] || '🤖'
     sendTelegram(`🤖 *AI Agent完成*\n\n${typeEmoji} *${task.title}*\n📁 ${project.name}\n\n輸出已就緒，點擊🤖查看並核准。`).catch(() => {})
   } catch (err) {
     console.error('[agent-bg] error:', err.message)
-    const tList = readJSON(TASKS_FILE, [])
-    const idx   = tList.findIndex(t => t.id === taskId)
-    if (idx !== -1) { tList[idx] = { ...tList[idx], agentStatus: 'error', updatedAt: now() }; writeJSON(TASKS_FILE, tList) }
+    await db.query('UPDATE tasks SET agent_status=$1, updated_at=$2 WHERE id=$3', ['error', now(), taskId]).catch(() => {})
     sendTelegram(`⚠️ *AI Agent錯誤*\n\n*${task?.title || taskId}*\n${err.message}`).catch(() => {})
   }
 }
 
-app.put('/api/tasks/:id', (req, res) => {
-  const { _lang, ...body } = req.body
-  const list = readJSON(TASKS_FILE, [])
-  const idx = list.findIndex(t => t.id === req.params.id)
-  if (idx === -1) return res.status(404).json({ error: 'Not found' })
-  const prev = list[idx]
-  list[idx] = { ...prev, ...body, id: req.params.id, updatedAt: now() }
+app.put('/api/tasks/:id', async (req, res) => {
+  try {
+    const { _lang, ...body } = req.body
+    const { rows: prev } = await db.query('SELECT * FROM tasks WHERE id=$1', [req.params.id])
+    if (!prev.length) return res.status(404).json({ error: 'Not found' })
+    const p = rowToTask(prev[0])
 
-  // Auto-trigger when task first enters in_progress and no agent has run before
-  const trigger = body.status === 'in_progress' && prev.status !== 'in_progress' && !prev.agentStatus
-  if (trigger) list[idx].agentStatus = 'running'
+    const trigger = body.status === 'in_progress' && p.status !== 'in_progress' && !p.agentStatus
+    const agentStatus = trigger ? 'running' : (body.agentStatus ?? p.agentStatus)
 
-  writeJSON(TASKS_FILE, list)
-  res.json(list[idx])
-
-  if (trigger) {
-    runAgentBackground(req.params.id, list[idx].projectId, _lang || 'en').catch(err =>
-      console.error('[agent-bg] unhandled:', err.message)
+    const { rows } = await db.query(
+      `UPDATE tasks SET
+         title=COALESCE($1,title), description=COALESCE($2,description),
+         status=COALESCE($3,status), priority=COALESCE($4,priority),
+         estimated_hours=COALESCE($5,estimated_hours), actual_hours=COALESCE($6,actual_hours),
+         due_date=$7, assignee=COALESCE($8,assignee),
+         tags=COALESCE($9,tags), sort_order=COALESCE($10,sort_order),
+         agent_type=COALESCE($11,agent_type), agent_status=$12,
+         agent_output=COALESCE($13,agent_output), updated_at=$14
+       WHERE id=$15 RETURNING *`,
+      [body.title, body.description, body.status, body.priority,
+       body.estimatedHours, body.actualHours,
+       body.dueDate !== undefined ? body.dueDate : p.dueDate,
+       body.assignee, body.tags ? JSON.stringify(body.tags) : null,
+       body.sortOrder, body.agentType, agentStatus,
+       body.agentOutput, now(), req.params.id]
     )
-  }
+    const updated = rowToTask(rows[0])
+    res.json(updated)
+
+    if (trigger) {
+      runAgentBackground(req.params.id, updated.projectId, _lang || 'en').catch(err =>
+        console.error('[agent-bg] unhandled:', err.message)
+      )
+    }
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.post('/api/tasks/:id/agent/retry', (req, res) => {
-  const list = readJSON(TASKS_FILE, [])
-  const idx = list.findIndex(t => t.id === req.params.id)
-  if (idx === -1) return res.status(404).json({ error: 'Not found' })
-  list[idx] = { ...list[idx], agentStatus: 'running', updatedAt: now() }
-  writeJSON(TASKS_FILE, list)
-  res.json(list[idx])
-  runAgentBackground(req.params.id, list[idx].projectId, req.body.lang || 'en').catch(err =>
-    console.error('[agent-bg] retry unhandled:', err.message)
-  )
+app.post('/api/tasks/:id/agent/retry', async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      'UPDATE tasks SET agent_status=$1, updated_at=$2 WHERE id=$3 RETURNING *',
+      ['running', now(), req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    const task = rowToTask(rows[0])
+    res.json(task)
+    runAgentBackground(req.params.id, task.projectId, req.body.lang || 'en').catch(err =>
+      console.error('[agent-bg] retry unhandled:', err.message)
+    )
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.delete('/api/tasks/:id', (req, res) => {
-  writeJSON(TASKS_FILE, readJSON(TASKS_FILE, []).filter(t => t.id !== req.params.id))
-  res.json({ ok: true })
+app.delete('/api/tasks/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM tasks WHERE id=$1', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
-app.get('/api/notes', (req, res) => {
-  const all = readJSON(NOTES_FILE, [])
-  res.json(req.query.projectId ? all.filter(n => n.projectId === req.query.projectId) : all)
+app.get('/api/notes', async (req, res) => {
+  try {
+    const { projectId } = req.query
+    const { rows } = projectId
+      ? await db.query('SELECT * FROM notes WHERE project_id=$1 ORDER BY created_at DESC', [projectId])
+      : await db.query('SELECT * FROM notes ORDER BY created_at DESC')
+    res.json(rows.map(rowToNote))
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.post('/api/notes', (req, res) => {
-  const list = readJSON(NOTES_FILE, [])
-  const item = {
-    id: uid(),
-    projectId: req.body.projectId,
-    content: req.body.content || '',
-    aiExtracted: req.body.aiExtracted || [],
-    createdAt: now(),
-  }
-  list.unshift(item)
-  writeJSON(NOTES_FILE, list)
-  res.json(item)
+app.post('/api/notes', async (req, res) => {
+  try {
+    const item = {
+      id: uid(), projectId: req.body.projectId,
+      content: req.body.content || '',
+      aiExtracted: req.body.aiExtracted || [],
+      createdAt: now(),
+    }
+    await db.query(
+      'INSERT INTO notes (id,project_id,content,ai_extracted,created_at) VALUES ($1,$2,$3,$4,$5)',
+      [item.id, item.projectId, item.content, JSON.stringify(item.aiExtracted), item.createdAt]
+    )
+    res.json(item)
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.delete('/api/notes/:id', (req, res) => {
-  writeJSON(NOTES_FILE, readJSON(NOTES_FILE, []).filter(n => n.id !== req.params.id))
-  res.json({ ok: true })
+app.delete('/api/notes/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM notes WHERE id=$1', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 // ── Dashboard stats ───────────────────────────────────────────────────────────
-app.get('/api/dashboard', (req, res) => {
-  const projects = readJSON(PROJECTS_FILE, [])
-  const tasks    = readJSON(TASKS_FILE, [])
-  const today    = new Date().toISOString().split('T')[0]
-  const in7days  = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]
-
-  res.json({
-    totalProjects:    projects.length,
-    activeProjects:   projects.filter(p => p.status === 'active').length,
-    completedProjects:projects.filter(p => p.status === 'completed').length,
-    totalTasks:       tasks.length,
-    todoTasks:        tasks.filter(t => t.status === 'todo').length,
-    inProgressTasks:  tasks.filter(t => t.status === 'in_progress').length,
-    reviewTasks:      tasks.filter(t => t.status === 'review').length,
-    doneTasks:        tasks.filter(t => t.status === 'done').length,
-    blockedTasks:     tasks.filter(t => t.status === 'blocked').length,
-    overdueTasks:     tasks.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done').length,
-    upcomingProjects: projects
-      .filter(p => p.dueDate && p.dueDate >= today && p.dueDate <= in7days && p.status === 'active')
-      .sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
-    recentProjects: projects.slice(0, 5),
-  })
+app.get('/api/dashboard', async (req, res) => {
+  try {
+    const { rows: projects } = await db.query('SELECT * FROM projects ORDER BY created_at DESC')
+    const { rows: tasks }    = await db.query('SELECT * FROM tasks')
+    const today   = new Date().toISOString().split('T')[0]
+    const in7days = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]
+    const p = projects.map(rowToProject)
+    const t = tasks.map(rowToTask)
+    res.json({
+      totalProjects:     p.length,
+      activeProjects:    p.filter(x => x.status === 'active').length,
+      completedProjects: p.filter(x => x.status === 'completed').length,
+      totalTasks:        t.length,
+      todoTasks:         t.filter(x => x.status === 'todo').length,
+      inProgressTasks:   t.filter(x => x.status === 'in_progress').length,
+      reviewTasks:       t.filter(x => x.status === 'review').length,
+      doneTasks:         t.filter(x => x.status === 'done').length,
+      blockedTasks:      t.filter(x => x.status === 'blocked').length,
+      overdueTasks:      t.filter(x => x.dueDate && x.dueDate < today && x.status !== 'done').length,
+      upcomingProjects:  p.filter(x => x.dueDate && x.dueDate >= today && x.dueDate <= in7days && x.status === 'active')
+                          .sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+      recentProjects: p.slice(0, 5),
+    })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 // ── AI system prompt ──────────────────────────────────────────────────────────
-// Function so date is fresh on each call (not frozen at startup).
 function getPMSystem() {
   return `You are an expert AI project manager with 15 years of experience in software engineering, agile, and product strategy. You help teams plan, execute, and track projects with clarity. Be specific, actionable, and concise. Today's date: ${new Date().toISOString().split('T')[0]}.`
 }
 
-// Language directive appended to system prompt so AI responds in the user's selected language.
-// For JSON endpoints: values are in the target language; property keys must stay in English.
 function getLangDirective(lang) {
   if (lang === 'zh') return ' Respond in Traditional Chinese (繁體中文). For JSON output, keep property names in English but write all string values in Traditional Chinese.'
   if (lang === 'ar') return ' Respond in Arabic (العربية). For JSON output, keep property names in English but write all string values in Arabic.'
   return ''
 }
 
-// Generate full project plan as JSON task array
 app.post('/api/ai/generate-plan', async (req, res) => {
   const { projectName, description, goal, dueDate, teamSize, lang } = req.body
   const prompt = `Generate a detailed project plan as a JSON array of tasks.
@@ -578,9 +758,9 @@ Generate 8-15 tasks covering the full project lifecycle in logical order. Return
   await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 2000)
 })
 
-// Daily standup summary
 app.post('/api/ai/standup', async (req, res) => {
-  const { project, tasks, lang } = req.body
+  const { project, lang } = req.body
+  const tasks = req.body.tasks || []
   const done       = tasks.filter(t => t.status === 'done').map(t => t.title)
   const inProgress = tasks.filter(t => t.status === 'in_progress').map(t => t.title)
   const blocked    = tasks.filter(t => t.status === 'blocked').map(t => t.title)
@@ -606,9 +786,9 @@ Format:
   await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 400)
 })
 
-// Risk analysis
 app.post('/api/ai/risks', async (req, res) => {
-  const { project, tasks, lang } = req.body
+  const { project, lang } = req.body
+  const tasks = req.body.tasks || []
   const today   = new Date().toISOString().split('T')[0]
   const overdue = tasks.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done')
   const blocked = tasks.filter(t => t.status === 'blocked')
@@ -635,13 +815,12 @@ Provide:
   await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 700)
 })
 
-// Weekly report across all projects
 app.post('/api/ai/weekly-report', async (req, res) => {
   const { projects, tasks, lang } = req.body
   const today = new Date().toISOString().split('T')[0]
 
   const summaries = projects.map(p => {
-    const pt   = tasks.filter(t => t.projectId === p.id)
+    const pt    = tasks.filter(t => t.projectId === p.id)
     const done  = pt.filter(t => t.status === 'done').length
     const total = pt.length
     const overdue = pt.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done').length
@@ -665,7 +844,6 @@ Write a professional weekly report:
   await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 1200)
 })
 
-// Parse meeting notes → extract tasks as JSON
 app.post('/api/ai/parse-notes', async (req, res) => {
   const { content, projectName, lang } = req.body
 
@@ -690,18 +868,13 @@ Extract every concrete action, decision, or commitment. Return only the JSON arr
   await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 1500)
 })
 
-// Translate project fields to target language (non-streaming JSON)
 app.post('/api/ai/translate-fields', async (req, res) => {
   const { fields, lang } = req.body
   const langName = lang === 'zh' ? 'Traditional Chinese (繁體中文)' : lang === 'ar' ? 'Arabic (العربية)' : 'English'
   try {
     const text = await multiGenerate([
       { role: 'system', content: 'You are a professional translator. Translate only the values, not the keys. Keep proper nouns and brand names as-is unless they have a standard translation.' },
-      { role: 'user', content: `Translate these project fields to ${langName}. Return ONLY a JSON object with the same keys.
-
-${JSON.stringify(fields, null, 2)}
-
-Return only valid JSON, no markdown, no explanation.` },
+      { role: 'user', content: `Translate these project fields to ${langName}. Return ONLY a JSON object with the same keys.\n\n${JSON.stringify(fields, null, 2)}\n\nReturn only valid JSON, no markdown, no explanation.` },
     ], 400)
     const match = text.match(/\{[\s\S]*\}/)
     res.json(match ? JSON.parse(match[0]) : fields)
@@ -710,27 +883,13 @@ Return only valid JSON, no markdown, no explanation.` },
   }
 })
 
-// Quick task estimation (non-streaming JSON)
 app.post('/api/ai/estimate', async (req, res) => {
   const { title, description, projectContext, lang } = req.body
   try {
     const text = await multiGenerate([
       { role: 'system', content: getPMSystem() + getLangDirective(lang) },
-      { role: 'user', content: `Estimate the effort for this task. Return ONLY a JSON object:
-{
-  "hours": number,
-  "confidence": "low" | "medium" | "high",
-  "rationale": "one sentence",
-  "subtasks": ["step 1", "step 2", ...]
-}
-
-Task: ${title}
-Details: ${description || 'None'}
-Project context: ${projectContext || 'Software project'}
-
-Return only JSON.` },
+      { role: 'user', content: `Estimate the effort for this task. Return ONLY a JSON object:\n{\n  "hours": number,\n  "confidence": "low" | "medium" | "high",\n  "rationale": "one sentence",\n  "subtasks": ["step 1", "step 2", ...]\n}\n\nTask: ${title}\nDetails: ${description || 'None'}\nProject context: ${projectContext || 'Software project'}\n\nReturn only JSON.` },
     ], 300)
-
     const match = text.match(/\{[\s\S]*\}/)
     res.json(match ? JSON.parse(match[0]) : { hours: null, confidence: 'low', rationale: text, subtasks: [] })
   } catch (err) {
@@ -738,7 +897,6 @@ Return only JSON.` },
   }
 })
 
-// Global risk scan across all projects
 app.post('/api/ai/global-risks', async (req, res) => {
   const { projects, tasks, lang } = req.body
   const today = new Date().toISOString().split('T')[0]
@@ -748,9 +906,7 @@ app.post('/api/ai/global-risks', async (req, res) => {
     const overdue = pt.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done')
     const blocked = pt.filter(t => t.status === 'blocked')
     const done = pt.filter(t => t.status === 'done').length
-    return `**${p.name}** [${p.status}] ${done}/${pt.length} done, due ${p.dueDate || 'N/A'}
-Overdue: ${overdue.map(t => t.title).join(', ') || 'None'}
-Blocked: ${blocked.map(t => t.title).join(', ') || 'None'}`
+    return `**${p.name}** [${p.status}] ${done}/${pt.length} done, due ${p.dueDate || 'N/A'}\nOverdue: ${overdue.map(t => t.title).join(', ') || 'None'}\nBlocked: ${blocked.map(t => t.title).join(', ') || 'None'}`
   }).join('\n\n')
 
   const prompt = `Perform a risk scan across all projects.
@@ -862,11 +1018,13 @@ async function runPlanner(task, project, lang, res) {
 
 app.post('/api/ai/agent-run', async (req, res) => {
   const { taskId, projectId, agentType, lang } = req.body
-  const task    = readJSON(TASKS_FILE, []).find(t => t.id === taskId)
-  const project = readJSON(PROJECTS_FILE, []).find(p => p.id === projectId)
-  if (!task || !project) return res.status(404).json({ error: 'not found' })
-
-  const projectTasks = readJSON(TASKS_FILE, []).filter(t => t.projectId === projectId)
+  const { rows: tr } = await db.query('SELECT * FROM tasks WHERE id=$1', [taskId])
+  const { rows: pr } = await db.query('SELECT * FROM projects WHERE id=$1', [projectId])
+  if (!tr.length || !pr.length) return res.status(404).json({ error: 'not found' })
+  const task = rowToTask(tr[0])
+  const project = rowToProject(pr[0])
+  const { rows: allTaskRows } = await db.query('SELECT * FROM tasks WHERE project_id=$1', [projectId])
+  const projectTasks = allTaskRows.map(rowToTask)
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
@@ -884,11 +1042,7 @@ app.post('/api/ai/agent-run', async (req, res) => {
     else if (type === 'plan')  await runPlanner(task, project, lang, res)
     else                       await runWriter(task, project, projectTasks, lang, res)
 
-    // Persist agentType so writer agents can use research output as context
-    const tList = readJSON(TASKS_FILE, [])
-    const idx = tList.findIndex(t => t.id === taskId)
-    if (idx !== -1) { tList[idx].agentType = type; tList[idx].updatedAt = now(); writeJSON(TASKS_FILE, tList) }
-
+    await db.query('UPDATE tasks SET agent_type=$1, updated_at=$2 WHERE id=$3', [type, now(), taskId])
     console.log(`[agent] ${type} completed — "${task.title}"`)
   } catch (err) {
     console.error('[agent] error:', err.message)
@@ -904,8 +1058,9 @@ async function sendTelegram(text) {
   const botToken = process.env.BOT_TOKEN
   const chatId   = process.env.OWNER_TELEGRAM_ID
   if (!botToken || !chatId) return
+  const _fetch = customFetch ?? fetch
   try {
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    await _fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
@@ -913,9 +1068,7 @@ async function sendTelegram(text) {
   } catch (err) { console.error('[telegram] send error:', err.message) }
 }
 
-// Restore digest state across restarts so we never double-send on the same day
-let _lastDigestAt = readJSON(DIGEST_STATE_FILE, {}).lastDigestAt || null
-if (_lastDigestAt) console.log(`[digest] restored lastDigestAt: ${_lastDigestAt}`)
+let _lastDigestAt = null
 
 function digestSentToday() {
   if (!_lastDigestAt) return false
@@ -928,10 +1081,12 @@ async function sendMorningDigest() {
   const chatId   = process.env.OWNER_TELEGRAM_ID
   if (!botToken || !chatId) { console.warn('[digest] BOT_TOKEN or OWNER_TELEGRAM_ID not set'); return }
 
-  const projects = readJSON(PROJECTS_FILE, []).filter(p => p.status === 'active')
+  const { rows: projectRows } = await db.query(`SELECT * FROM projects WHERE status='active'`)
+  const projects = projectRows.map(rowToProject)
   if (!projects.length) { console.log('[digest] no active projects, skipping'); return }
 
-  const allTasks = readJSON(TASKS_FILE, [])
+  const { rows: taskRows } = await db.query('SELECT * FROM tasks')
+  const allTasks = taskRows.map(rowToTask)
   const today = new Date().toISOString().split('T')[0]
 
   const summaries = projects.map(p => {
@@ -941,11 +1096,7 @@ async function sendMorningDigest() {
     const od = pt.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done').map(t => t.title)
     const td = pt.filter(t => t.status === 'todo').slice(0, 3).map(t => t.title)
     const done = pt.filter(t => t.status === 'done').length
-    return `Project: ${p.name} (${done}/${pt.length} done${p.dueDate ? ', due ' + p.dueDate : ''})
-In Progress: ${ip.join(', ') || 'none'}
-Blocked: ${bl.join(', ') || 'none'}
-Overdue: ${od.join(', ') || 'none'}
-Next Up: ${td.join(', ') || 'none'}`
+    return `Project: ${p.name} (${done}/${pt.length} done${p.dueDate ? ', due ' + p.dueDate : ''})\nIn Progress: ${ip.join(', ') || 'none'}\nBlocked: ${bl.join(', ') || 'none'}\nOverdue: ${od.join(', ') || 'none'}\nNext Up: ${td.join(', ') || 'none'}`
   }).join('\n\n')
 
   const prompt = `Write a tight morning digest for these active projects. One section per project (max 3 bullets each). End with a single "🎯 Today's focus:" line across all projects.
@@ -982,12 +1133,11 @@ Rules:
 
   await sendTelegram(msg)
   _lastDigestAt = new Date().toISOString()
-  fs.writeFileSync(DIGEST_STATE_FILE, JSON.stringify({ lastDigestAt: _lastDigestAt }))
+  await db.query('UPDATE digest_state SET last_digest_at=$1 WHERE id=1', [_lastDigestAt])
   console.log(`[digest] sent — ${projects.length} projects`)
 }
 
 function scheduleNextDigest() {
-  // Use Intl to correctly determine current Taipei time regardless of system timezone.
   const f = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false })
   const parts = Object.fromEntries(f.formatToParts(new Date()).map(p => [p.type, +p.value]))
   const elapsedSec = parts.hour * 3600 + parts.minute * 60 + parts.second
@@ -1004,30 +1154,30 @@ function scheduleNextDigest() {
   }, ms)
 }
 
-// Manual trigger for testing — GET /pm/api/ai/digest/now
 app.get('/api/ai/digest/now', async (req, res) => {
   res.json({ ok: true, message: 'Digest sending…' })
   await sendMorningDigest().catch(e => console.error('[digest] manual trigger error:', e.message))
 })
 
-// ── Provider status check ─────────────────────────────────────────────────────
-app.get('/api/status', (req, res) => {
-  const now = Date.now()
+// ── Provider status ───────────────────────────────────────────────────────────
+app.get('/api/status', async (req, res) => {
+  const ts = Date.now()
+  let projectCount = 0, taskCount = 0
+  try {
+    const { rows: pc } = await db.query('SELECT COUNT(*) as cnt FROM projects')
+    const { rows: tc } = await db.query('SELECT COUNT(*) as cnt FROM tasks')
+    projectCount = parseInt(pc[0].cnt, 10)
+    taskCount    = parseInt(tc[0].cnt, 10)
+  } catch {}
   res.json({
     providers: PROVIDERS.map(p => {
       const coolUntil = _cooldown[p.name]
-      const coolingDown = !!(coolUntil && now < coolUntil)
-      return {
-        name: p.name,
-        configured: !!p.key,
-        model: p.model,
-        coolingDown,
-        cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null,
-      }
+      const coolingDown = !!(coolUntil && ts < coolUntil)
+      return { name: p.name, configured: !!p.key, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null }
     }),
-    dataDir: DATA_DIR,
-    projects: readJSON(PROJECTS_FILE, []).length,
-    tasks: readJSON(TASKS_FILE, []).length,
+    storage: 'cockroachdb',
+    projects: projectCount,
+    tasks: taskCount,
     lastDigestAt: _lastDigestAt,
   })
 })
@@ -1059,13 +1209,8 @@ app.get('/api/admin/status', async (req, res) => {
 
   const services = await Promise.all(checks)
 
-  // Watchdog last line
   let watchdogLine = 'no log'
   try { watchdogLine = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').pop() } catch {}
-
-  // ATung Syncthing binds to 127.0.0.1 — not reachable from chusMBp over Tailscale.
-  // ATung watchdog monitors it locally every 5 min and alerts via Telegram on failure.
-  const syncthingOk = null  // null = monitored externally, not directly checkable
 
   const ts = Date.now()
   res.json({
@@ -1076,8 +1221,9 @@ app.get('/api/admin/status', async (req, res) => {
       return { name: p.name, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null }
     }),
     watchdog: { lastLine: watchdogLine },
-    syncthing: { healthy: syncthingOk },
+    syncthing: { healthy: null },
     digest: { lastDigestAt: _lastDigestAt },
+    storage: 'cockroachdb',
     checkedAt: new Date().toISOString(),
   })
 })
@@ -1094,14 +1240,20 @@ app.post('/api/admin/restart', (req, res) => {
   }
 })
 
-// ── Frontend (production) ─────────────────────────────────────────────────────
-// Served under /pm so proxy route { prefix: '/pm', target: 3004 } (no strip) works.
-// Direct access: http://host:3004/ redirects to /pm
+app.get('/api/admin/ssh-diag', (req, res) => {
+  let sshdUp = false
+  try { execSync('nc -z -w 2 localhost 22', { timeout: 3000 }); sshdUp = true } catch {}
+  let borelog = '', boreout = ''
+  try { borelog = fs.readFileSync('/tmp/bore-ssh.log', 'utf-8').trim().split('\n').slice(-15).join('\n') } catch {}
+  try { boreout = fs.readFileSync('/tmp/bore-ssh-output.log', 'utf-8').trim().slice(-500) } catch {}
+  const portMatch = boreout.match(/bore\.pub:(\d+)/)
+  res.json({ sshdUp, borePort: portMatch ? portMatch[1] : null, borelog, boreout })
+})
+
+// ── Frontend ──────────────────────────────────────────────────────────────────
 if (process.env.NODE_ENV === 'production') {
   const distDir = path.join(__dirname, '../dist')
   app.get('/', (req, res) => res.redirect('/pm'))
-  // No-cache for HTML so browsers always fetch the latest bundle filename.
-  // Hashed JS/CSS assets are fine to cache (filenames change on rebuild).
   app.use('/pm', (req, res, next) => {
     if (!req.path || req.path === '/' || req.path.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-store')
@@ -1115,8 +1267,44 @@ if (process.env.NODE_ENV === 'production') {
   })
 }
 
+app.get('/health', (req, res) => res.json({ ok: true, service: 'ai-project-manager' }))
+
+// ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3004
-app.listen(PORT, () => {
-  console.log(`[ai-pm] started on port ${PORT}`)
-  scheduleNextDigest()
-})
+
+async function start() {
+  await initDb()
+
+  // Restore digest state from DB
+  try {
+    const { rows } = await db.query('SELECT last_digest_at FROM digest_state WHERE id=1')
+    if (rows[0]?.last_digest_at) {
+      _lastDigestAt = new Date(rows[0].last_digest_at).toISOString()
+      console.log(`[digest] restored lastDigestAt: ${_lastDigestAt}`)
+    }
+  } catch (err) {
+    console.warn('[digest] could not restore state:', err.message)
+  }
+
+  app.listen(PORT, () => {
+    console.log(`[ai-pm] started on port ${PORT}`)
+    scheduleNextDigest()
+  })
+}
+
+// Retry startup up to 5 times with exponential backoff — CockroachDB Serverless
+// sometimes returns ETIMEDOUT on the first connection after a pause.
+;(async () => {
+  let delay = 5000
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      await start()
+      return
+    } catch (err) {
+      console.error(`[ai-pm] startup failed (attempt ${attempt}/5): ${err.message ?? err}`)
+      if (attempt === 5) { process.exit(1) }
+      await new Promise(r => setTimeout(r, delay))
+      delay = Math.min(delay * 2, 30_000)
+    }
+  }
+})()
