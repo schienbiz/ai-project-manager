@@ -4,6 +4,68 @@ import AgentPanel from './AgentPanel.jsx'
 import TaskForm from './TaskForm.jsx'
 import { useLang } from '../i18n.js'
 
+function KanbanFilters({ filter, onChange, tasks }) {
+  const { t } = useLang()
+  const today = new Date().toISOString().split('T')[0]
+  const hasActive = filter.priority || filter.agent || filter.search
+
+  return (
+    <div className="kanban-filters">
+      <button
+        className={`filter-btn${!filter.priority && !filter.agent ? ' active' : ''}`}
+        onClick={() => onChange({ priority: null, agent: null, search: filter.search })}
+      >{t.filterAll}</button>
+
+      <span className="filter-divider" />
+
+      {['high', 'urgent'].map(p => (
+        <button
+          key={p}
+          className={`filter-btn${filter.priority === p ? ' active' : ''}`}
+          onClick={() => onChange({ ...filter, priority: filter.priority === p ? null : p })}
+        >
+          {p === 'urgent' ? '🔴' : '🟠'} {t[`priority${p.charAt(0).toUpperCase() + p.slice(1)}`]}
+        </button>
+      ))}
+
+      <button
+        className={`filter-btn${filter.priority === 'blocked' ? ' active' : ''}`}
+        onClick={() => onChange({ ...filter, priority: filter.priority === 'blocked' ? null : 'blocked' })}
+      >{t.filterBlocked}</button>
+
+      <button
+        className={`filter-btn${filter.agent === 'overdue' ? ' active' : ''}`}
+        onClick={() => onChange({ ...filter, agent: filter.agent === 'overdue' ? null : 'overdue' })}
+      >⏰ {t.filterOverdue}</button>
+
+      <button
+        className={`filter-btn${filter.agent === 'has_ai' ? ' active' : ''}`}
+        onClick={() => onChange({ ...filter, agent: filter.agent === 'has_ai' ? null : 'has_ai' })}
+      >🤖 {t.filterHasAI}</button>
+
+      <button
+        className={`filter-btn${filter.agent === 'running' ? ' active' : ''}`}
+        onClick={() => onChange({ ...filter, agent: filter.agent === 'running' ? null : 'running' })}
+      >⏳ {t.filterRunning}</button>
+
+      <span className="filter-divider" />
+
+      <input
+        className="filter-search"
+        placeholder={t.filterSearch}
+        value={filter.search || ''}
+        onChange={e => onChange({ ...filter, search: e.target.value })}
+      />
+
+      {hasActive && (
+        <button className="filter-clear" onClick={() => onChange({ priority: null, agent: null, search: '' })}>
+          {t.filterClear}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function fmtDate(d, locale) {
   if (!d) return null
   return new Date(d + 'T00:00:00').toLocaleDateString(locale, { month: 'short', day: 'numeric' })
@@ -32,6 +94,20 @@ export default function ProjectDetail({
   const [taskForm, setTaskForm] = useState(null)
   const [draggingId, setDraggingId] = useState(null)
   const [dragOver, setDragOver] = useState(null)
+  const [filter, setFilter] = useState({ priority: null, agent: null, search: '' })
+
+  const today = new Date().toISOString().split('T')[0]
+  const applyFilter = (ts) => {
+    let result = ts
+    if (filter.priority === 'blocked') result = result.filter(t2 => t2.status === 'blocked')
+    else if (filter.priority) result = result.filter(t2 => t2.priority === filter.priority)
+    if (filter.agent === 'overdue') result = result.filter(t2 => t2.dueDate && t2.dueDate < today && t2.status !== 'done')
+    else if (filter.agent === 'has_ai') result = result.filter(t2 => t2.agentStatus)
+    else if (filter.agent === 'running') result = result.filter(t2 => t2.agentStatus === 'running')
+    if (filter.search) result = result.filter(t2 => t2.title.toLowerCase().includes(filter.search.toLowerCase()))
+    return result
+  }
+  const filteredTasks = applyFilter(tasks)
 
   const COLUMNS = [
     { key: 'todo',        label: t.colTodo,       color: 'var(--todo)' },
@@ -58,7 +134,7 @@ export default function ProjectDetail({
       <div className="project-header">
         <div className="flex items-center gap-8">
           <h2 style={{ flex: 1 }}>{project.name}</h2>
-          <button className="btn btn-ai btn-sm" onClick={() => setShowAI(true)}>{t.aiAssistant}</button>
+          <button className="btn btn-ai btn-sm" onClick={() => setShowAI(s => !s)}>{t.aiAssistant}</button>
           <button className="btn btn-sm" onClick={onEditProject}>{t.edit}</button>
           <button className="btn btn-danger btn-sm" onClick={onDeleteProject}>{t.delete}</button>
         </div>
@@ -74,48 +150,71 @@ export default function ProjectDetail({
         </div>
       </div>
 
-      <div className="kanban">
-        {COLUMNS.map(col => {
-          const colTasks = tasks.filter(t2 => t2.status === col.key).sort((a, b) => a.sortOrder - b.sortOrder)
-          return (
-            <div key={col.key} className="kanban-col">
-              <div className="kanban-col-header">
-                <span className="col-title">
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: col.color, display: 'inline-block' }} />
-                  {col.label}
-                </span>
-                <span className="col-count">{colTasks.length}</span>
-              </div>
-              <div
-                className={`kanban-body${dragOver === col.key ? ' drag-over' : ''}`}
-                onDragOver={e => { e.preventDefault(); setDragOver(col.key) }}
-                onDragLeave={() => setDragOver(null)}
-                onDrop={() => handleDrop(col.key)}
-              >
-                {colTasks.map(task => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    isDragging={draggingId === task.id}
-                    onDragStart={() => setDraggingId(task.id)}
-                    onEdit={() => setTaskForm({ status: task.status, task })}
-                    onDelete={() => onDeleteTask(task.id)}
-                    onStatusChange={(status) => onUpdateTask(task.id, { status, _lang: lang })}
-                    onQuickDone={() => onUpdateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done', _lang: lang })}
-                    onRunAgent={() => setAgentTask(task)}
-                    onRetryAgent={() => onRetryAgent?.(task.id)}
-                  />
-                ))}
-                <button className="kanban-add" onClick={() => setTaskForm({ status: col.key })}>
-                  {t.addTaskBtn}
-                </button>
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      <KanbanFilters filter={filter} onChange={setFilter} tasks={tasks} />
 
-      <NotesSection notes={notes} onCreateNote={onCreateNote} onDeleteNote={onDeleteNote} />
+      <div className="project-body">
+        <div className="project-content">
+          <div className="kanban">
+            {COLUMNS.map(col => {
+              const colTasks = filteredTasks.filter(t2 => t2.status === col.key).sort((a, b) => a.sortOrder - b.sortOrder)
+              const totalInCol = tasks.filter(t2 => t2.status === col.key).length
+              return (
+                <div key={col.key} className="kanban-col">
+                  <div className="kanban-col-header">
+                    <span className="col-title">
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: col.color, display: 'inline-block' }} />
+                      {col.label}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="col-count">{colTasks.length}{colTasks.length !== totalInCol ? `/${totalInCol}` : ''}</span>
+                      <button
+                        className="kanban-col-add"
+                        onClick={() => setTaskForm({ status: col.key })}
+                        title={t.addTaskBtn}
+                      >+</button>
+                    </div>
+                  </div>
+                  <div
+                    className={`kanban-body${dragOver === col.key ? ' drag-over' : ''}`}
+                    onDragOver={e => { e.preventDefault(); setDragOver(col.key) }}
+                    onDragLeave={() => setDragOver(null)}
+                    onDrop={() => handleDrop(col.key)}
+                  >
+                    {colTasks.map(task => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        isDragging={draggingId === task.id}
+                        onDragStart={() => setDraggingId(task.id)}
+                        onEdit={() => setTaskForm({ status: task.status, task })}
+                        onDelete={() => onDeleteTask(task.id)}
+                        onStatusChange={(status) => onUpdateTask(task.id, { status, _lang: lang })}
+                        onQuickDone={() => onUpdateTask(task.id, { status: task.status === 'done' ? 'todo' : 'done', _lang: lang })}
+                        onRunAgent={() => setAgentTask(task)}
+                        onRetryAgent={() => onRetryAgent?.(task.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <NotesSection notes={notes} onCreateNote={onCreateNote} onDeleteNote={onDeleteNote} />
+        </div>
+
+        {showAI && (
+          <AIPanel
+            project={project}
+            tasks={tasks}
+            allProjects={allProjects}
+            allTasks={allTasks}
+            onClose={() => setShowAI(false)}
+            onApplyTasks={onBulkCreateTasks}
+            onCreateNote={onCreateNote}
+          />
+        )}
+      </div>
 
       {taskForm && (
         <TaskForm
@@ -132,18 +231,6 @@ export default function ProjectDetail({
             setTaskForm(null)
           }}
           onClose={() => setTaskForm(null)}
-        />
-      )}
-
-      {showAI && (
-        <AIPanel
-          project={project}
-          tasks={tasks}
-          allProjects={allProjects}
-          allTasks={allTasks}
-          onClose={() => setShowAI(false)}
-          onApplyTasks={onBulkCreateTasks}
-          onCreateNote={onCreateNote}
         />
       )}
 
@@ -251,7 +338,7 @@ function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone
 
   return (
     <div
-      className={`task-card${isDragging ? ' dragging' : ''}${isDone ? ' task-done' : ''}`}
+      className={`task-card${isDragging ? ' dragging' : ''}${isDone ? ' task-done' : ''}${task.agentStatus === 'running' ? ' agent-running' : ''}`}
       draggable
       onDragStart={onDragStart}
     >

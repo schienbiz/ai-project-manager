@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from './api.js'
 import { LangContext, T } from './i18n.js'
 import Sidebar from './components/Sidebar.jsx'
@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard.jsx'
 import ProjectDetail from './components/ProjectDetail.jsx'
 import ProjectForm from './components/ProjectForm.jsx'
 import AdminDashboard from './components/AdminDashboard.jsx'
+import CommandPalette from './components/CommandPalette.jsx'
 
 export default function App() {
   const [lang, setLang] = useState(() => localStorage.getItem('lang') || 'en')
@@ -18,9 +19,36 @@ export default function App() {
   const [editingProject, setEditingProject] = useState(null)
   const [loading, setLoading] = useState(true)
   const [notes, setNotes] = useState([])
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('sidebarCollapsed') === '1')
+  const [toasts, setToasts] = useState([])
+  const [showCmdPalette, setShowCmdPalette] = useState(false)
+  const toastId = useRef(0)
 
   const switchLang = (l) => { setLang(l); localStorage.setItem('lang', l) }
   const t = T[lang]
+
+  const addToast = useCallback((msg, type = 'success') => {
+    const id = ++toastId.current
+    setToasts(prev => [...prev, { id, msg, type }])
+    setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), 2500)
+  }, [])
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(c => {
+      const next = !c
+      localStorage.setItem('sidebarCollapsed', next ? '1' : '0')
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setShowCmdPalette(p => !p) }
+      if (e.key === 'Escape') setShowCmdPalette(false)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   const loadData = useCallback(async () => {
     const [ps, ts, st] = await Promise.all([api.getProjects(), api.getTasks(''), api.getDashboard()])
@@ -36,13 +64,23 @@ export default function App() {
     if (selectedId) api.getNotes(selectedId).then(setNotes)
   }, [selectedId])
 
-  // Poll every 3s while any task has an agent running in the background
+  // Poll every 3s while any task has an agent running — targeted: only fetches running tasks
   const hasRunningAgents = tasks.some(t => t.agentStatus === 'running')
   useEffect(() => {
     if (!hasRunningAgents) return
     const id = setInterval(async () => {
-      const ts = await api.getTasks('')
-      setTasks(ts)
+      const running = await api.getRunningTasks()
+      if (running.length === 0) {
+        // All agents finished — full refresh once to pick up final statuses
+        const ts = await api.getTasks('')
+        setTasks(ts)
+      } else {
+        // Merge updated running tasks into state, leave everything else untouched
+        setTasks(prev => {
+          const map = new Map(running.map(t => [t.id, t]))
+          return prev.map(t => map.has(t.id) ? map.get(t.id) : t)
+        })
+      }
     }, 3000)
     return () => clearInterval(id)
   }, [hasRunningAgents])
@@ -71,45 +109,60 @@ export default function App() {
     setView('dashboard')
     setSelectedId(null)
     loadData()
+    addToast(t.toastProjectDeleted)
   }
 
   const handleCreateTask = async (data) => {
-    const t = await api.createTask(data)
-    setTasks(prev => [...prev, t])
-    return t
+    const tk = await api.createTask(data)
+    setTasks(prev => [...prev, tk])
+    addToast(t.toastTaskCreated)
+    return tk
   }
 
   const handleUpdateTask = async (id, data) => {
-    const t = await api.updateTask(id, data)
-    setTasks(prev => prev.map(x => x.id === id ? t : x))
-    return t
+    // Optimistic update — apply locally before API confirms
+    const { _lang, ...optimistic } = data
+    setTasks(prev => prev.map(x => x.id === id ? { ...x, ...optimistic } : x))
+    try {
+      const tk = await api.updateTask(id, data)
+      setTasks(prev => prev.map(x => x.id === id ? tk : x))
+      return tk
+    } catch (err) {
+      // Revert on failure
+      api.getTasks('').then(setTasks)
+      throw err
+    }
   }
 
   const handleDeleteTask = async (id) => {
     await api.deleteTask(id)
     setTasks(prev => prev.filter(x => x.id !== id))
+    addToast(t.toastTaskDeleted)
   }
 
   const handleCreateNote = async (content, aiExtracted = []) => {
     const n = await api.createNote({ projectId: selectedId, content, aiExtracted })
     setNotes(prev => [n, ...prev])
+    addToast(t.toastNoteSaved, 'info')
     return n
   }
 
   const handleDeleteNote = async (id) => {
     await api.deleteNote(id)
     setNotes(prev => prev.filter(n => n.id !== id))
+    addToast(t.toastNoteDeleted)
   }
 
   const handleRetryAgent = async (id) => {
-    const t = await api.retryAgent(id, lang)
-    setTasks(prev => prev.map(x => x.id === id ? t : x))
-    return t
+    const tk = await api.retryAgent(id, lang)
+    setTasks(prev => prev.map(x => x.id === id ? tk : x))
+    return tk
   }
 
   const handleBulkCreateTasks = async (tasksData, projectId) => {
-    const created = await Promise.all(tasksData.map(t => api.createTask({ ...t, projectId })))
+    const created = await Promise.all(tasksData.map(tk => api.createTask({ ...tk, projectId })))
     setTasks(prev => [...prev, ...created])
+    addToast(t.toastTasksApplied(created.length))
     return created
   }
 
@@ -136,6 +189,8 @@ export default function App() {
         onAdmin={() => setView('admin')}
         onNewProject={() => { setEditingProject(null); setShowProjectForm(true) }}
         view={view}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebar}
       />
 
       <div className="main">
@@ -185,6 +240,27 @@ export default function App() {
           onClose={() => { setShowProjectForm(false); setEditingProject(null) }}
         />
       )}
+
+      {showCmdPalette && (
+        <CommandPalette
+          projects={projects}
+          tasks={tasks}
+          onSelectProject={(id) => { selectProject(id); setShowCmdPalette(false) }}
+          onNewProject={() => { setShowProjectForm(true); setShowCmdPalette(false) }}
+          onClose={() => setShowCmdPalette(false)}
+        />
+      )}
+
+      <div className="toast-container">
+        {toasts.map(toast => (
+          <div key={toast.id} className={`toast ${toast.type}`}>
+            {toast.type === 'success' && '✓ '}
+            {toast.type === 'error' && '✕ '}
+            {toast.type === 'info' && '· '}
+            {toast.msg}
+          </div>
+        ))}
+      </div>
     </div>
     </LangContext.Provider>
   )

@@ -52,6 +52,7 @@ const pool = new Pool({
   ssl: _sslOpts,
   max: 5,
   idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,  // CockroachDB Serverless cold-start: fail fast so retry kicks in sooner
 })
 
 pool.on('error', (err) => console.error('[db] pool error:', err.message))
@@ -141,18 +142,9 @@ function rowToNote(r) {
   }
 }
 
-// macOS system certs fix (same pattern as other chusMBp apps)
-let customFetch
-try {
-  const ca = execSync(
-    'security export -t certs -f pemseq -k /System/Library/Keychains/SystemRootCertificates.keychain 2>/dev/null',
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-  )
-  if (ca.trim()) {
-    const agent = new Agent({ connect: { ca, rejectUnauthorized: true } })
-    customFetch = (url, init) => undiciFetch(url, { ...init, dispatcher: agent })
-  }
-} catch {}
+// NODE_EXTRA_CA_CERTS=/etc/ssl/cert.pem is set in plist — Node.js global fetch
+// already trusts all standard CAs. customFetch/undici Agent is no longer needed.
+const customFetch = undefined
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -184,7 +176,7 @@ const PROVIDERS = [
   },
   {
     name: 'Qwen3',
-    key: process.env.GROQ_API_KEY,
+    key: process.env.GROQ_QWEN_API_KEY || process.env.GROQ_API_KEY,  // separate key avoids shared rate limit with Groq Llama
     baseURL: 'https://api.groq.com/openai/v1',
     model: 'qwen/qwen3-32b',
     timeout: 10_000,
@@ -495,6 +487,15 @@ app.delete('/api/projects/:id', async (req, res) => {
 })
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
+app.get('/api/tasks/running', async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      "SELECT * FROM tasks WHERE agent_status='running' ORDER BY updated_at ASC"
+    )
+    res.json(rows.map(rowToTask))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 app.get('/api/tasks', async (req, res) => {
   try {
     const { projectId } = req.query
@@ -1295,7 +1296,7 @@ async function start() {
 // Retry startup up to 5 times with exponential backoff — CockroachDB Serverless
 // sometimes returns ETIMEDOUT on the first connection after a pause.
 ;(async () => {
-  let delay = 5000
+  let delay = 1000
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       await start()
@@ -1304,7 +1305,7 @@ async function start() {
       console.error(`[ai-pm] startup failed (attempt ${attempt}/5): ${err.message ?? err}`)
       if (attempt === 5) { process.exit(1) }
       await new Promise(r => setTimeout(r, delay))
-      delay = Math.min(delay * 2, 30_000)
+      delay = Math.min(Math.round(delay * 1.5), 10_000)
     }
   }
 })()

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { streamAI } from '../api.js'
 import { useLang } from '../i18n.js'
 
@@ -16,6 +16,12 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
   const [tab, setTab] = useState('plan')
   const [output, setOutput] = useState('')
   const [streaming, setStreaming] = useState(false)
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
   const [parsedTasks, setParsedTasks] = useState(null)
   const [applying, setApplying] = useState(false)
   const [planOpts, setPlanOpts] = useState({ teamSize: '', dueDate: project.dueDate || '' })
@@ -95,115 +101,113 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
   const placeholder = { plan: t.phPlan, standup: t.phStandup, risks: t.phRisks, report: t.phReport, notes: t.phNotes }
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal modal-lg" style={{ height: '80vh' }}>
-        <div className="modal-header">
-          <h3>{t.aiPanelTitle(project.name)}</h3>
-          <button className="close-btn" onClick={onClose}>×</button>
+    <div className="ai-drawer">
+      <div className="ai-drawer-header">
+        <h3>✨ AI — {project.name}</h3>
+        <button className="close-btn" onClick={onClose}>×</button>
+      </div>
+
+      <div className="ai-drawer-body">
+        <div className="ai-tabs">
+          {TABS.map(tb => (
+            <button
+              key={tb.key}
+              className={`ai-tab ${tab === tb.key ? 'active' : ''}`}
+              onClick={() => { setTab(tb.key); setOutput(''); setParsedTasks(null) }}
+            >
+              {tb.label}
+            </button>
+          ))}
         </div>
 
-        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 0 }}>
-          <div className="ai-tabs">
-            {TABS.map(tb => (
-              <button
-                key={tb.key}
-                className={`ai-tab ${tab === tb.key ? 'active' : ''}`}
-                onClick={() => { setTab(tb.key); setOutput(''); setParsedTasks(null) }}
-              >
-                {tb.label}
-              </button>
-            ))}
-          </div>
-
-          {tab === 'plan' && (
-            <div className="form-row">
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>{t.teamSizeLabel}</label>
-                <input value={planOpts.teamSize} onChange={e => setPlanOpts(o => ({ ...o, teamSize: e.target.value }))} placeholder={t.teamSizePlaceholder} />
-              </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>{t.dueDateLabel2}</label>
-                <input type="date" value={planOpts.dueDate} onChange={e => setPlanOpts(o => ({ ...o, dueDate: e.target.value }))} />
-              </div>
-            </div>
-          )}
-
-          {tab === 'notes' && (
+        {tab === 'plan' && (
+          <div className="form-row">
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>{t.pasteNotesLabel}</label>
-              <textarea
-                value={notesText}
-                onChange={e => setNotesText(e.target.value)}
-                placeholder={t.notesPastePlaceholder}
-                rows={5}
-                style={{ minHeight: 100 }}
-              />
+              <label>{t.teamSizeLabel}</label>
+              <input value={planOpts.teamSize} onChange={e => setPlanOpts(o => ({ ...o, teamSize: e.target.value }))} placeholder={t.teamSizePlaceholder} />
             </div>
-          )}
-
-          {tab === 'standup' && (
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {t.standupInfo(
-                tasks.filter(t2 => t2.status === 'done').length,
-                tasks.filter(t2 => t2.status === 'in_progress').length,
-                tasks.filter(t2 => t2.status === 'blocked').length
-              )}
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>{t.dueDateLabel2}</label>
+              <input type="date" value={planOpts.dueDate} onChange={e => setPlanOpts(o => ({ ...o, dueDate: e.target.value }))} />
             </div>
-          )}
-
-          {tab === 'risks' && (
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {t.risksInfo(
-                tasks.filter(t2 => t2.status === 'blocked').length,
-                tasks.filter(t2 => {
-                  const today = new Date().toISOString().split('T')[0]
-                  return t2.dueDate && t2.dueDate < today && t2.status !== 'done'
-                }).length
-              )}
-            </div>
-          )}
-
-          {tab === 'report' && allProjects?.length > 1 && (
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {t.allProjectsReportInfo(allProjects.length)}
-            </div>
-          )}
-
-          <button className="btn btn-ai" onClick={handleRun} disabled={streaming}>
-            {streaming ? t.thinking : t.run}
-          </button>
-
-          <div className={`ai-output ${!output ? 'empty' : ''}`} style={{ flex: 1, minHeight: 120 }}>
-            {!output && !streaming
-              ? placeholder[tab]
-              : <OutputText text={output} streaming={streaming} />
-            }
           </div>
+        )}
 
-          {parsedTasks && (
-            <div className="task-preview">
-              <div className="flex items-center gap-8" style={{ marginBottom: 8 }}>
-                <strong style={{ fontSize: 13 }}>{t.tasksReady(parsedTasks.length)}</strong>
-                <button className="btn btn-primary btn-sm ml-auto" onClick={handleApply} disabled={applying}>
-                  {applying ? t.applying : t.applyToBoard}
-                </button>
-              </div>
-              {parsedTasks.slice(0, 5).map((tk, i) => (
-                <div key={i} className="task-preview-item">
-                  <span className={`badge badge-${tk.priority}`}>{PRIORITY_LABEL[tk.priority] ?? tk.priority}</span>
-                  <span>{tk.title}</span>
-                  {tk.estimatedHours && <span className="text-muted text-sm ml-auto">{tk.estimatedHours}h</span>}
-                </div>
-              ))}
-              {parsedTasks.length > 5 && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.more(parsedTasks.length - 5)}</div>}
+        {tab === 'notes' && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>{t.pasteNotesLabel}</label>
+            <textarea
+              value={notesText}
+              onChange={e => setNotesText(e.target.value)}
+              placeholder={t.notesPastePlaceholder}
+              rows={4}
+              style={{ minHeight: 90 }}
+            />
+          </div>
+        )}
+
+        {tab === 'standup' && (
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {t.standupInfo(
+              tasks.filter(t2 => t2.status === 'done').length,
+              tasks.filter(t2 => t2.status === 'in_progress').length,
+              tasks.filter(t2 => t2.status === 'blocked').length
+            )}
+          </div>
+        )}
+
+        {tab === 'risks' && (
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {t.risksInfo(
+              tasks.filter(t2 => t2.status === 'blocked').length,
+              tasks.filter(t2 => {
+                const today = new Date().toISOString().split('T')[0]
+                return t2.dueDate && t2.dueDate < today && t2.status !== 'done'
+              }).length
+            )}
+          </div>
+        )}
+
+        {tab === 'report' && allProjects?.length > 1 && (
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {t.allProjectsReportInfo(allProjects.length)}
+          </div>
+        )}
+
+        <button className="btn btn-ai" onClick={handleRun} disabled={streaming}>
+          {streaming ? t.thinking : t.run}
+        </button>
+
+        <div className={`ai-output ${!output ? 'empty' : ''}`} style={{ flex: 1, minHeight: 120 }}>
+          {!output && !streaming
+            ? placeholder[tab]
+            : <OutputText text={output} streaming={streaming} />
+          }
+        </div>
+
+        {parsedTasks && (
+          <div className="task-preview">
+            <div className="flex items-center gap-8" style={{ marginBottom: 8 }}>
+              <strong style={{ fontSize: 13 }}>{t.tasksReady(parsedTasks.length)}</strong>
+              <button className="btn btn-primary btn-sm ml-auto" onClick={handleApply} disabled={applying}>
+                {applying ? t.applying : t.applyToBoard}
+              </button>
             </div>
-          )}
-        </div>
+            {parsedTasks.slice(0, 5).map((tk, i) => (
+              <div key={i} className="task-preview-item">
+                <span className={`badge badge-${tk.priority}`}>{PRIORITY_LABEL[tk.priority] ?? tk.priority}</span>
+                <span>{tk.title}</span>
+                {tk.estimatedHours && <span className="text-muted text-sm ml-auto">{tk.estimatedHours}h</span>}
+              </div>
+            ))}
+            {parsedTasks.length > 5 && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{t.more(parsedTasks.length - 5)}</div>}
+          </div>
+        )}
+      </div>
 
-        <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
-          <span className="ai-hint">{t.poweredBy}</span>
-          <button className="btn" onClick={onClose}>{t.close}</button>
-        </div>
+      <div className="ai-drawer-footer">
+        <span className="ai-hint">{t.poweredBy}</span>
+        <button className="btn btn-sm" onClick={onClose}>{t.close}</button>
       </div>
     </div>
   )

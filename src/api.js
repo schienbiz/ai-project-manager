@@ -15,6 +15,7 @@ export const api = {
 
   // Tasks
   getTasks:        (projectId) => fetch(`/pm/api/tasks?projectId=${projectId}`).then(json),
+  getRunningTasks: () => fetch('/pm/api/tasks/running').then(json),
   createTask:      (data) => post('/pm/api/tasks', data),
   updateTask:      (id, data) => put(`/pm/api/tasks/${id}`, data),
   bulkUpdateTasks: (updates) => put('/pm/api/tasks/bulk', updates),
