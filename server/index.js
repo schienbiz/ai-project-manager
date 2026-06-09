@@ -23,7 +23,7 @@ import OpenAI from 'openai'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { randomUUID } from 'crypto'
+import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from 'crypto'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import pg from 'pg'
@@ -1130,7 +1130,13 @@ Rules:
   }
 
   const dateStr = new Date().toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'long', day: 'numeric', weekday: 'short' })
-  const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}`
+
+  const expiringKeys = loadVault().filter(e => e.expiry && daysUntil(e.expiry) <= 7)
+  const keyWarning = expiringKeys.length
+    ? '\n\n⚠️ *API Keys 即將到期:*\n' + expiringKeys.map(e => `• *${e.name}* — ${daysUntil(e.expiry) < 0 ? '已過期' : `${daysUntil(e.expiry)}天後到期`}`).join('\n')
+    : ''
+
+  const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}${keyWarning}`
 
   await sendTelegram(msg)
   _lastDigestAt = new Date().toISOString()
@@ -1194,8 +1200,145 @@ const ADMIN_SERVICES = [
 
 const ALLOWED_LABELS = new Set(ADMIN_SERVICES.map(s => s.label))
 
+// ── Render services (external) ────────────────────────────────────────────────
+const RENDER_SERVICES = [
+  { name: '2560戰法',              host: 'two560-app.onrender.com',              path: '/' },
+  { name: 'Travel Advisor',       host: 'travel-advisor-wwrz.onrender.com',     path: '/' },
+  { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/' },
+  { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/' },
+  { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/' },
+]
+
+// In-memory cache — admin status returns this instantly instead of blocking on HTTP polls
+let _renderCache = { services: [], checkedAt: null }
+// State map for alert deduplication (only alert on healthy→unhealthy transitions)
+const _renderHealthState = {}
+
+async function refreshRenderCache() {
+  const results = await Promise.all(RENDER_SERVICES.map(async (svc) => {
+    const t0 = Date.now()
+    try {
+      const r = await Promise.race([
+        fetch(`https://${svc.host}${svc.path}`),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+      ])
+      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 500 }
+    } catch {
+      return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
+    }
+  }))
+
+  // Alert on state transitions
+  for (const svc of results) {
+    const wasHealthy = _renderHealthState[svc.name]
+    _renderHealthState[svc.name] = svc.healthy
+    if (wasHealthy === true && !svc.healthy) {
+      sendTelegram(`🔴 *Render 服務異常*\n\n*${svc.name}* 無法回應\nHost: \`${svc.host}\`\nStatus: ${svc.status}`).catch(() => {})
+      console.warn(`[render] ${svc.name} DOWN`)
+    } else if (wasHealthy === false && svc.healthy) {
+      sendTelegram(`🟢 *Render 服務恢復*\n\n*${svc.name}* 已恢復正常`).catch(() => {})
+      console.log(`[render] ${svc.name} recovered`)
+    }
+  }
+
+  _renderCache = { services: results, checkedAt: new Date().toISOString() }
+  console.log(`[render] cache refreshed — ${results.filter(s => s.healthy).length}/${results.length} healthy`)
+}
+
+// Refresh every 60s; warm cache immediately on startup
+setInterval(() => refreshRenderCache().catch(e => console.error('[render] refresh error:', e.message)), 60_000)
+
+// ── API Key Vault ─────────────────────────────────────────────────────────────
+const VAULT_PATH = path.join(__dirname, '../data/vault.json')
+
+function _vaultKey() {
+  const k = process.env.VAULT_KEY
+  if (!k || k.length < 64) return null
+  return Buffer.from(k.slice(0, 64), 'hex')
+}
+
+function encryptVaultValue(plain) {
+  const key = _vaultKey()
+  if (!key) return null
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return [iv.toString('hex'), enc.toString('hex'), tag.toString('hex')].join('.')
+}
+
+function decryptVaultValue(enc) {
+  const key = _vaultKey()
+  if (!key || !enc) return null
+  try {
+    const [ivHex, encHex, tagHex] = enc.split('.')
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'))
+    decipher.setAuthTag(Buffer.from(tagHex, 'hex'))
+    return Buffer.concat([decipher.update(Buffer.from(encHex, 'hex')), decipher.final()]).toString('utf8')
+  } catch { return null }
+}
+
+function loadVault() {
+  try { return JSON.parse(fs.readFileSync(VAULT_PATH, 'utf-8')) } catch { return [] }
+}
+
+function saveVault(entries) {
+  fs.mkdirSync(path.dirname(VAULT_PATH), { recursive: true })
+  fs.writeFileSync(VAULT_PATH, JSON.stringify(entries, null, 2))
+}
+
+app.get('/api/admin/vault', (req, res) => {
+  const entries = loadVault().map(e => {
+    const plain = decryptVaultValue(e.encryptedValue)
+    return {
+      name: e.name,
+      description: e.description,
+      expiry: e.expiry || null,
+      maskedValue: plain ? `••••${plain.slice(-4)}` : (e.encryptedValue ? '••••[encrypted]' : null),
+      addedAt: e.addedAt,
+      updatedAt: e.updatedAt,
+      expiryWarning: e.expiry ? daysUntil(e.expiry) <= 7 : false,
+    }
+  })
+  res.json({ entries, vaultKeySet: !!_vaultKey() })
+})
+
+function daysUntil(isoDate) {
+  return Math.floor((new Date(isoDate) - Date.now()) / 86_400_000)
+}
+
+app.post('/api/admin/vault', (req, res) => {
+  const { name, description, expiry, value } = req.body
+  if (!name || !/^[A-Za-z0-9_\-. ]+$/.test(name)) return res.status(400).json({ error: 'Invalid name' })
+  const entries = loadVault()
+  const now = new Date().toISOString()
+  const idx = entries.findIndex(e => e.name === name)
+  const entry = {
+    name: name.trim(),
+    description: description?.trim() || '',
+    expiry: expiry || null,
+    encryptedValue: value ? encryptVaultValue(value) : (idx >= 0 ? entries[idx].encryptedValue : null),
+    addedAt: idx >= 0 ? entries[idx].addedAt : now,
+    updatedAt: now,
+  }
+  if (idx >= 0) entries[idx] = entry
+  else entries.push(entry)
+  saveVault(entries)
+  console.log(`[vault] upserted key: ${entry.name}`)
+  res.json({ ok: true, name: entry.name })
+})
+
+app.delete('/api/admin/vault/:name', (req, res) => {
+  const name = decodeURIComponent(req.params.name)
+  const entries = loadVault().filter(e => e.name !== name)
+  saveVault(entries)
+  console.log(`[vault] deleted key: ${name}`)
+  res.json({ ok: true })
+})
+
 app.get('/api/admin/status', async (req, res) => {
-  const checks = ADMIN_SERVICES.map(async (svc) => {
+  // Local services: fast localhost polls (≤4s timeout, run in parallel)
+  const services = await Promise.all(ADMIN_SERVICES.map(async (svc) => {
     const t0 = Date.now()
     try {
       const r = await Promise.race([
@@ -1206,9 +1349,7 @@ app.get('/api/admin/status', async (req, res) => {
     } catch {
       return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
     }
-  })
-
-  const services = await Promise.all(checks)
+  }))
 
   let watchdogLine = 'no log'
   try { watchdogLine = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').pop() } catch {}
@@ -1216,6 +1357,9 @@ app.get('/api/admin/status', async (req, res) => {
   const ts = Date.now()
   res.json({
     services,
+    // Render: serve cached results instantly — refreshRenderCache() runs every 60s in background
+    renderServices: _renderCache.services,
+    renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,
     providers: PROVIDERS.map(p => {
       const coolUntil = _cooldown[p.name]
       const coolingDown = !!(coolUntil && ts < coolUntil)
@@ -1290,6 +1434,8 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`[ai-pm] started on port ${PORT}`)
     scheduleNextDigest()
+    // Warm Render cache on startup (non-blocking — don't delay HTTP readiness)
+    refreshRenderCache().catch(e => console.error('[render] startup warm error:', e.message))
   })
 }
 

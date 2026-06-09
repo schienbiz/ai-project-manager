@@ -30,6 +30,9 @@ export const api = {
   // Admin
   getAdminStatus:  () => fetch('/pm/api/admin/status').then(json),
   restartService:  (label) => post('/pm/api/admin/restart', { label }),
+  getVault:        () => fetch('/pm/api/admin/vault').then(json),
+  upsertVaultKey:  (data) => post('/pm/api/admin/vault', data),
+  deleteVaultKey:  (name) => del(`/pm/api/admin/vault/${encodeURIComponent(name)}`),
 
   // AI helpers
   estimateTask:     (data) => post('/pm/api/ai/estimate', data),

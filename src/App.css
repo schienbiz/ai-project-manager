@@ -403,3 +403,43 @@ body {
 .cmd-empty { padding: 24px 16px; text-align: center; color: var(--muted); font-size: 13px; }
 .cmd-footer { padding: 8px 16px; border-top: 1px solid var(--border); display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
 .cmd-key { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: inherit; }
+
+/* ── Admin: Render status badges ── */
+.render-status-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.render-ok  { color: #3fb950; background: rgba(63,185,80,.1); }
+.render-err { color: var(--danger); background: rgba(248,81,73,.1); }
+.dot-ok   { background: #3fb950; }
+.dot-err  { background: var(--danger); }
+.dot-warn { background: #e3b341; }
+
+/* ── Admin section title with action row ── */
+.admin-section-title-row { display: flex; align-items: center; justify-content: space-between; }
+.vault-header-right { display: flex; align-items: center; gap: 8px; }
+.vault-no-key { font-size: 11px; color: #e3b341; }
+
+/* ── API Key Vault ── */
+.vault-table { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.vault-thead { display: grid; grid-template-columns: 1.6fr 2fr 1.4fr 1fr 100px; gap: 8px; padding: 7px 12px; background: var(--surface2); font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
+.vault-row { display: grid; grid-template-columns: 1.6fr 2fr 1.4fr 1fr 100px; gap: 8px; padding: 8px 12px; align-items: center; border-bottom: 1px solid var(--border); transition: background .1s; }
+.vault-row:last-child { border-bottom: none; }
+.vault-row:hover { background: var(--surface2); }
+.vault-row-warn { background: rgba(227,179,65,.05); }
+.vault-cell-name { font-size: 12px; font-weight: 600; font-family: monospace; color: var(--text); }
+.vault-cell-desc { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vault-cell-val  { font-size: 11px; color: var(--muted); font-family: monospace; }
+.vault-cell-expiry { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.vault-cell-actions { display: flex; gap: 4px; }
+.vault-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; }
+.vault-badge-expired { background: rgba(248,81,73,.2); color: var(--danger); }
+.vault-badge-danger  { background: rgba(248,81,73,.15); color: var(--danger); }
+.vault-badge-warn    { background: rgba(227,179,65,.15); color: #e3b341; }
+.vault-badge-ok      { background: rgba(63,185,80,.1); color: #3fb950; }
+.vault-form { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.vault-form-row { display: flex; gap: 8px; }
+.vault-input { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--text); font-family: inherit; outline: none; }
+.vault-input:focus { border-color: #58a6ff; }
+.vault-input-date { max-width: 160px; }
+.vault-input-value { font-family: monospace; }
+.vault-form-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn-danger { background: rgba(248,81,73,.15) !important; color: var(--danger) !important; border-color: rgba(248,81,73,.3) !important; }
+.btn-danger:hover { background: rgba(248,81,73,.25) !important; }
