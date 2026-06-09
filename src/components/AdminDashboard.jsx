@@ -25,6 +25,13 @@ function daysUntil(isoDate) {
   return Math.floor((new Date(isoDate) - Date.now()) / 86_400_000)
 }
 
+function latencyClass(ms) {
+  if (ms == null) return ''
+  if (ms < 100) return 'lat-fast'
+  if (ms < 400) return 'lat-mid'
+  return 'lat-slow'
+}
+
 function ExpiryBadge({ expiry }) {
   if (!expiry) return null
   const days = daysUntil(expiry)
@@ -72,6 +79,61 @@ function VaultForm({ onSave, onCancel, initial }) {
   )
 }
 
+function HealthPill({ label, ok, total }) {
+  const allOk = ok === total
+  return (
+    <span className={`admin-hp ${allOk ? 'hp-ok' : 'hp-warn'}`}>
+      <span className={`admin-dot ${allOk ? 'dot-ok' : 'dot-warn'}`} style={{ width: 6, height: 6, flexShrink: 0 }} />
+      {label} <strong>{ok}/{total}</strong>
+    </span>
+  )
+}
+
+function HealthStrip({ data }) {
+  const localHealthy = data.services.filter(s => s.healthy).length
+  const localTotal = data.services.length
+  const renderHealthy = (data.renderServices || []).filter(s => s.healthy).length
+  const renderTotal = (data.renderServices || []).length
+  const providerHealthy = data.providers.filter(p => !p.coolingDown).length
+  const providerTotal = data.providers.length
+  const healthyLocals = data.services.filter(s => s.healthy && s.latency != null)
+  const avgLatency = healthyLocals.length
+    ? Math.round(healthyLocals.reduce((a, s) => a + s.latency, 0) / healthyLocals.length)
+    : null
+  const allNominal = localHealthy === localTotal && renderHealthy === renderTotal && providerHealthy === providerTotal
+
+  return (
+    <div className="admin-health-strip">
+      <HealthPill label="Local" ok={localHealthy} total={localTotal} />
+      {renderTotal > 0 && <HealthPill label="Render" ok={renderHealthy} total={renderTotal} />}
+      {providerTotal > 0 && <HealthPill label="AI" ok={providerHealthy} total={providerTotal} />}
+      {avgLatency != null && (
+        <span className={`admin-hp hp-lat ${latencyClass(avgLatency)}`}>avg {avgLatency}ms</span>
+      )}
+      <span className={`admin-hs-status ${allNominal ? 'hs-ok' : 'hs-warn'}`}>
+        {allNominal ? '✓ All nominal' : '⚠ Issues detected'}
+      </span>
+    </div>
+  )
+}
+
+function SectionHeader({ title, ok, total, right }) {
+  const allOk = ok == null || ok === total
+  return (
+    <div className="admin-section-hdr">
+      <span className="admin-section-title">{title}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {right}
+        {total > 0 && (
+          <span className={`admin-section-cnt ${allOk ? 'cnt-ok' : 'cnt-warn'}`}>
+            {ok}/{total}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function AdminDashboard({ onBack }) {
   const [data, setData]         = useState(null)
   const [loading, setLoading]   = useState(true)
@@ -79,7 +141,6 @@ export default function AdminDashboard({ onBack }) {
   const [error, setError]       = useState(null)
   const [lastRefresh, setLastRefresh] = useState(null)
 
-  // Vault state
   const [vault, setVault]       = useState(null)
   const [showVaultForm, setShowVaultForm] = useState(false)
   const [editingKey, setEditingKey] = useState(null)
@@ -143,6 +204,7 @@ export default function AdminDashboard({ onBack }) {
           </span>
           <button className="btn btn-sm btn-ai" onClick={refresh}>↺ Refresh</button>
         </div>
+        {data && <HealthStrip data={data} />}
       </div>
 
       {loading && <div className="admin-loading">Checking services…</div>}
@@ -153,8 +215,12 @@ export default function AdminDashboard({ onBack }) {
 
           {/* Local Services */}
           <section className="admin-section">
-            <div className="admin-section-title">Local Services (chusMBp)</div>
-            <div className="admin-service-grid">
+            <SectionHeader
+              title="Local Services (chusMBp)"
+              ok={data.services.filter(s => s.healthy).length}
+              total={data.services.length}
+            />
+            <div className="admin-service-grid-2col">
               {data.services.map(svc => (
                 <div key={svc.label} className={`admin-service-card ${svc.healthy ? 'healthy' : 'unhealthy'}`}>
                   <div className="admin-svc-left">
@@ -162,7 +228,7 @@ export default function AdminDashboard({ onBack }) {
                     <div>
                       <div className="admin-svc-name">{svc.name}</div>
                       <div className="admin-svc-meta">
-                        :{svc.port} · {svc.status || 'no response'} · {svc.latency}ms
+                        :{svc.port} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms</span>
                       </div>
                     </div>
                   </div>
@@ -176,16 +242,16 @@ export default function AdminDashboard({ onBack }) {
                 </div>
               ))}
 
-              {/* ATung Syncthing — monitored locally by ATung watchdog, not reachable from chusMBp */}
-              <div className="admin-service-card" style={{ borderLeft: '3px solid #58a6ff', opacity: .8 }}>
+              {/* ATung Syncthing */}
+              <div className="admin-service-card admin-svc-atung">
                 <div className="admin-svc-left">
-                  <span className="admin-dot" style={{ background: '#58a6ff' }} />
+                  <span className="admin-dot dot-info" />
                   <div>
                     <div className="admin-svc-name">ATung Syncthing</div>
                     <div className="admin-svc-meta">monitored by ATung watchdog · Telegram alerts on failure</div>
                   </div>
                 </div>
-                <span className="admin-svc-meta" style={{ paddingRight: 8 }}>ATung</span>
+                <span className="admin-atung-badge">ATung</span>
               </div>
             </div>
           </section>
@@ -193,23 +259,25 @@ export default function AdminDashboard({ onBack }) {
           {/* Render Services */}
           {data.renderServices && (
             <section className="admin-section">
-              <div className="admin-section-title-row">
-                <div className="admin-section-title">Render Services (外部)</div>
-                {data.renderCacheAge != null && (
+              <SectionHeader
+                title="Render Services (外部)"
+                ok={data.renderServices.filter(s => s.healthy).length}
+                total={data.renderServices.length}
+                right={data.renderCacheAge != null && (
                   <span className="admin-svc-meta" style={{ fontSize: 11 }}>
                     cached {data.renderCacheAge < 60 ? `${data.renderCacheAge}s` : `${Math.floor(data.renderCacheAge / 60)}m`} ago · auto-refresh 60s
                   </span>
                 )}
-              </div>
-              <div className="admin-service-grid">
+              />
+              <div className="admin-service-grid-2col">
                 {data.renderServices.map(svc => (
                   <div key={svc.host} className={`admin-service-card ${svc.healthy ? 'healthy' : 'unhealthy'}`}>
                     <div className="admin-svc-left">
                       <span className={`admin-dot ${svc.healthy ? 'dot-ok' : 'dot-err'}`} />
                       <div>
                         <div className="admin-svc-name">{svc.name}</div>
-                        <div className="admin-svc-meta">
-                          {svc.host} · {svc.status || 'no response'} · {svc.latency}ms
+                        <div className="admin-svc-meta admin-svc-meta-ellipsis">
+                          {svc.host} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms</span>
                         </div>
                       </div>
                     </div>
@@ -224,16 +292,20 @@ export default function AdminDashboard({ onBack }) {
 
           {/* AI Providers */}
           <section className="admin-section">
-            <div className="admin-section-title">AI Providers</div>
-            <div className="admin-provider-grid">
+            <SectionHeader
+              title="AI Providers"
+              ok={data.providers.filter(p => !p.coolingDown).length}
+              total={data.providers.length}
+            />
+            <div className="admin-provider-grid-3col">
               {data.providers.map(p => (
                 <div key={p.name} className={`admin-provider-card ${p.coolingDown ? 'cooling' : 'ready'}`}>
                   <span className={`admin-dot ${p.coolingDown ? 'dot-warn' : 'dot-ok'}`} />
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div className="admin-svc-name">{p.name}</div>
-                    <div className="admin-svc-meta">
+                    <div className="admin-svc-meta admin-svc-meta-ellipsis" style={{ fontFamily: 'monospace', fontSize: 10 }}>
                       {p.model}
-                      {p.coolingDown && <span className="admin-cooldown"> · 🔴 cooling until {new Date(p.cooldownUntil).toLocaleTimeString()}</span>}
+                      {p.coolingDown && <span className="admin-cooldown"> · cooling until {new Date(p.cooldownUntil).toLocaleTimeString()}</span>}
                     </div>
                   </div>
                 </div>
@@ -243,8 +315,8 @@ export default function AdminDashboard({ onBack }) {
 
           {/* API Key Vault */}
           <section className="admin-section">
-            <div className="admin-section-title-row">
-              <div className="admin-section-title">API Key Vault</div>
+            <div className="admin-section-hdr">
+              <span className="admin-section-title">API Key Vault</span>
               <div className="vault-header-right">
                 {vault && !vault.vaultKeySet && (
                   <span className="vault-no-key">⚠️ VAULT_KEY 未設定，值不加密</span>
