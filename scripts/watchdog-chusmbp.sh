@@ -39,6 +39,7 @@ check_service "com.ai-learning-tool.dev"      "http://localhost:3003/health"
 check_service "com.marketing-assistant.dev"   "http://localhost:3001/"
 check_service "com.relationship-os.dev"       "http://localhost:3000/health"
 check_service "com.proxy.marketing"           "http://localhost:3002/"
+check_service "com.voice-trainer"             "http://localhost:3005/health"
 
 if [ ${#RESTARTED[@]} -gt 0 ]; then
   send_telegram "⚙️ *Watchdog auto-restarted*\n\n$(printf '• %s\n' "${RESTARTED[@]}")\n\n_chusMBp auto-healing triggered_"
