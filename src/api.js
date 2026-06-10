@@ -33,6 +33,8 @@ export const api = {
   getVault:        () => fetch('/pm/api/admin/vault').then(json),
   upsertVaultKey:  (data) => post('/pm/api/admin/vault', data),
   deleteVaultKey:  (name) => del(`/pm/api/admin/vault/${encodeURIComponent(name)}`),
+  revealVaultKey:     (name) => fetch(`/pm/api/admin/vault/${encodeURIComponent(name)}/reveal`).then(json),
+  forceRefreshRender: () => post('/pm/api/admin/render/refresh', {}),
 
   // AI helpers
   estimateTask:     (data) => post('/pm/api/ai/estimate', data),

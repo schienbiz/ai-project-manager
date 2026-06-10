@@ -9,6 +9,14 @@ function elapsed(iso) {
   return `${Math.floor(s / 3600)}h ago`
 }
 
+function parseWatchdogLine(line) {
+  if (!line || line === 'no log') return { time: null, message: line }
+  const m = line.match(/^\[watchdog\] (.+?\d{4}): (.+)$/)
+  if (!m) return { time: null, message: line }
+  const parsed = new Date(m[1])
+  return { time: isNaN(parsed) ? null : parsed, message: m[2] }
+}
+
 function nextDigest(lastIso) {
   if (!lastIso) return 'unknown'
   const last = new Date(lastIso)
@@ -42,10 +50,20 @@ function LatencyTrend({ delta }) {
 function ExpiryBadge({ expiry }) {
   if (!expiry) return null
   const days = daysUntil(expiry)
-  if (days < 0)  return <span className="vault-badge vault-badge-expired">過期</span>
+  if (days < 0)   return <span className="vault-badge vault-badge-expired">過期</span>
   if (days <= 3)  return <span className="vault-badge vault-badge-danger">{days}天</span>
   if (days <= 7)  return <span className="vault-badge vault-badge-warn">{days}天</span>
-  return <span className="vault-badge vault-badge-ok">{days}天</span>
+  if (days <= 30) return <span className="vault-badge vault-badge-med">{days}天</span>
+  return null
+}
+
+function expiryRowClass(expiry) {
+  if (!expiry) return ''
+  const days = daysUntil(expiry)
+  if (days < 0)   return 'vault-row-expired'
+  if (days <= 7)  return 'vault-row-danger'
+  if (days <= 30) return 'vault-row-med'
+  return ''
 }
 
 function VaultForm({ onSave, onCancel, initial }) {
@@ -158,6 +176,9 @@ export default function AdminDashboard({ onBack }) {
   const [showVaultForm, setShowVaultForm] = useState(false)
   const [editingKey, setEditingKey] = useState(null)
   const [collapsed, setCollapsed] = useState({})
+  const [revealedKeys, setRevealedKeys]     = useState({})
+  const [copyingKeys, setCopyingKeys]       = useState({})
+  const [refreshingRender, setRefreshingRender] = useState(false)
   const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
   const refresh = useCallback(async () => {
@@ -227,6 +248,36 @@ export default function AdminDashboard({ onBack }) {
     setVault(v)
   }
 
+  const handleForceRenderRefresh = async () => {
+    setRefreshingRender(true)
+    try {
+      await api.forceRefreshRender()
+      setTimeout(refresh, 3000)
+    } catch {}
+    setTimeout(() => setRefreshingRender(false), 3500)
+  }
+
+  const handleReveal = async (name) => {
+    if (revealedKeys[name] != null) {
+      setRevealedKeys(r => { const n = { ...r }; delete n[name]; return n })
+      return
+    }
+    try {
+      const { value } = await api.revealVaultKey(name)
+      setRevealedKeys(r => ({ ...r, [name]: value ?? '(no value)' }))
+    } catch (e) { alert(`Reveal failed: ${e.message}`) }
+  }
+
+  const handleCopy = async (name) => {
+    try {
+      let value = revealedKeys[name]
+      if (value == null) { const res = await api.revealVaultKey(name); value = res.value }
+      await navigator.clipboard.writeText(value ?? '')
+      setCopyingKeys(c => ({ ...c, [name]: true }))
+      setTimeout(() => setCopyingKeys(c => { const n = { ...c }; delete n[name]; return n }), 1500)
+    } catch (e) { alert(`Copy failed: ${e.message}`) }
+  }
+
   return (
     <div className="admin-dashboard">
       <div className="admin-header">
@@ -237,6 +288,7 @@ export default function AdminDashboard({ onBack }) {
             {lastRefresh ? `updated ${elapsed(lastRefresh.toISOString())}` : ''} · auto-refresh 10s
           </span>
           <button className="btn btn-sm btn-ai" onClick={refresh} title="Refresh (R)">↺ Refresh</button>
+          <span className="admin-shortcut-hint"><kbd>R</kbd> to refresh</span>
         </div>
         {data && <HealthStrip data={data} />}
       </div>
@@ -323,11 +375,18 @@ export default function AdminDashboard({ onBack }) {
                 total={data.renderServices.length}
                 collapsed={collapsed.render}
                 onToggle={() => toggleSection('render')}
-                right={data.renderCacheAge != null && (
-                  <span className="admin-svc-meta" style={{ fontSize: 11 }}>
-                    cached {data.renderCacheAge < 60 ? `${data.renderCacheAge}s` : `${Math.floor(data.renderCacheAge / 60)}m`} ago · auto-refresh 60s
-                  </span>
-                )}
+                right={
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {data.renderCacheAge != null && (
+                      <span className="admin-svc-meta" style={{ fontSize: 11 }}>
+                        cached {data.renderCacheAge < 60 ? `${data.renderCacheAge}s` : `${Math.floor(data.renderCacheAge / 60)}m`} ago · auto-refresh 60s
+                      </span>
+                    )}
+                    <button className="btn btn-sm" onClick={handleForceRenderRefresh} disabled={refreshingRender} title="Force refresh now">
+                      {refreshingRender ? '…' : '↺ Now'}
+                    </button>
+                  </div>
+                }
               />
               {!collapsed.render && <div className="admin-service-grid-2col">
                 {data.renderServices.map(svc => (
@@ -423,16 +482,26 @@ export default function AdminDashboard({ onBack }) {
                         onCancel={() => setEditingKey(null)}
                       />
                     ) : (
-                      <div className={`vault-row ${e.expiryWarning ? 'vault-row-warn' : ''}`}>
+                      <div className={`vault-row ${expiryRowClass(e.expiry)}`}>
                         <span className="vault-cell-name">{e.name}</span>
                         <span className="vault-cell-desc">{e.description || '—'}</span>
-                        <span className="vault-cell-val">{e.maskedValue || '—'}</span>
+                        <span className="vault-cell-val" title={revealedKeys[e.name] || undefined}>
+                          {revealedKeys[e.name] != null
+                            ? <span className="vault-val-revealed">{revealedKeys[e.name].length > 38 ? revealedKeys[e.name].slice(0, 38) + '…' : revealedKeys[e.name]}</span>
+                            : (e.maskedValue || '—')}
+                        </span>
                         <span className="vault-cell-expiry">
                           {e.expiry ? (
                             <><ExpiryBadge expiry={e.expiry} /> <span className="admin-svc-meta">{e.expiry.split('T')[0]}</span></>
                           ) : '—'}
                         </span>
                         <span className="vault-cell-actions">
+                          <button className="btn btn-sm vault-btn-icon" title="Copy value" onClick={() => handleCopy(e.name)}>
+                            {copyingKeys[e.name] ? '✓' : '⎘'}
+                          </button>
+                          <button className="btn btn-sm vault-btn-icon" title={revealedKeys[e.name] != null ? 'Hide' : 'Reveal'} onClick={() => handleReveal(e.name)}>
+                            {revealedKeys[e.name] != null ? '●' : '○'}
+                          </button>
                           <button className="btn btn-sm" onClick={() => setEditingKey(e.name)}>編輯</button>
                           <button className="btn btn-sm btn-danger" onClick={() => handleVaultDelete(e.name)}>刪除</button>
                         </span>
@@ -452,11 +521,21 @@ export default function AdminDashboard({ onBack }) {
           <div className="admin-bottom-row">
             <section className="admin-section admin-section-half">
               <SectionHeader title="Watchdog (chusMBp)" />
-              <div className="admin-info-card">
-                <div className="admin-svc-meta" style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                  {data.watchdog.lastLine}
-                </div>
-              </div>
+              {(() => {
+                const { time, message } = parseWatchdogLine(data.watchdog.lastLine)
+                return (
+                  <div className="admin-info-card">
+                    {time && (
+                      <div className="admin-svc-meta" style={{ fontSize: 10, marginBottom: 3 }}>
+                        {elapsed(time.toISOString())} · {time.toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei' })} Taipei
+                      </div>
+                    )}
+                    <div className="admin-svc-meta" style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                      {message || data.watchdog.lastLine}
+                    </div>
+                  </div>
+                )
+              })()}
             </section>
 
             <section className="admin-section admin-section-half">

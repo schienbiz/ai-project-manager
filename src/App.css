@@ -469,8 +469,8 @@ body {
 
 /* ── API Key Vault ── */
 .vault-table { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.vault-thead { display: grid; grid-template-columns: 1.6fr 2fr 1.4fr 1fr 100px; gap: 8px; padding: 7px 12px; background: var(--surface2); font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
-.vault-row { display: grid; grid-template-columns: 1.6fr 2fr 1.4fr 1fr 100px; gap: 8px; padding: 8px 12px; align-items: center; border-bottom: 1px solid var(--border); transition: background .1s; }
+.vault-thead { display: grid; grid-template-columns: 1.6fr 2fr 1.4fr 1fr 148px; gap: 8px; padding: 7px 12px; background: var(--surface2); font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
+.vault-row { display: grid; grid-template-columns: 1.6fr 2fr 1.4fr 1fr 148px; gap: 8px; padding: 8px 12px; align-items: center; border-bottom: 1px solid var(--border); transition: background .1s; }
 .vault-row:last-child { border-bottom: none; }
 .vault-row:hover { background: var(--surface2); }
 .vault-row-warn { background: rgba(227,179,65,.05); }
@@ -478,12 +478,19 @@ body {
 .vault-cell-desc { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vault-cell-val  { font-size: 11px; color: var(--muted); font-family: monospace; }
 .vault-cell-expiry { display: flex; align-items: center; gap: 4px; font-size: 11px; }
-.vault-cell-actions { display: flex; gap: 4px; }
+.vault-cell-actions { display: flex; gap: 3px; }
+.vault-btn-icon { width: 22px !important; padding: 2px 0 !important; font-size: 11px; text-align: center; flex-shrink: 0; }
+.vault-val-revealed { color: var(--text); font-family: monospace; font-size: 11px; }
+.admin-shortcut-hint { font-size: 10px; color: var(--muted); display: flex; align-items: center; gap: 3px; margin-left: 4px; }
+.admin-shortcut-hint kbd { background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; font-size: 9px; font-family: inherit; color: var(--text); line-height: 1.4; }
 .vault-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; }
 .vault-badge-expired { background: rgba(248,81,73,.2); color: var(--danger); }
 .vault-badge-danger  { background: rgba(248,81,73,.15); color: var(--danger); }
 .vault-badge-warn    { background: rgba(227,179,65,.15); color: #e3b341; }
-.vault-badge-ok      { background: rgba(63,185,80,.1); color: #3fb950; }
+.vault-badge-med     { background: rgba(227,179,65,.08); color: #c9a227; }
+.vault-row-expired   { background: rgba(248,81,73,.07) !important; }
+.vault-row-danger    { background: rgba(248,81,73,.04) !important; }
+.vault-row-med       { background: rgba(227,179,65,.04) !important; }
 .vault-form { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .vault-form-row { display: flex; gap: 8px; }
 .vault-input { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--text); font-family: inherit; outline: none; }

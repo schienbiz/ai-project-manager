@@ -203,7 +203,24 @@ function makeClient(p) {
 }
 
 const _cooldown = {}
-const _providerStats = {}  // { [name]: { ok: 0, err: 0, lastUsed: null } }
+
+const PROVIDER_STATS_PATH = path.join(__dirname, '../data/provider-stats.json')
+function _loadProviderStats() {
+  try { return JSON.parse(fs.readFileSync(PROVIDER_STATS_PATH, 'utf-8')) } catch { return {} }
+}
+const _providerStats = _loadProviderStats()
+
+let _statsFlushTimer = null
+function flushProviderStats() {
+  if (_statsFlushTimer) return
+  _statsFlushTimer = setTimeout(() => {
+    _statsFlushTimer = null
+    try {
+      fs.mkdirSync(path.dirname(PROVIDER_STATS_PATH), { recursive: true })
+      fs.writeFileSync(PROVIDER_STATS_PATH, JSON.stringify(_providerStats))
+    } catch {}
+  }, 2000)
+}
 
 function providerStat(name) {
   if (!_providerStats[name]) _providerStats[name] = { ok: 0, err: 0, lastUsed: null }
@@ -239,7 +256,7 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
           ...(p.extraParams || {}),
         })
         done = true
-        const s = providerStat(p.name); s.ok++; s.lastUsed = new Date().toISOString()
+        const s = providerStat(p.name); s.ok++; s.lastUsed = new Date().toISOString(); flushProviderStats()
         return res.choices[0]?.message?.content?.trim() || null
       })(),
       new Promise(resolve => setTimeout(() => {
@@ -251,7 +268,7 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
     done = true
     const is429 = err.status === 429 || err.message?.includes('429')
     const is413 = err.status === 413 || err.message?.includes('413') || err.message?.includes('too large')
-    providerStat(p.name).err++
+    providerStat(p.name).err++; flushProviderStats()
     if (is429) {
       setCooldown(p.name, 60_000)
     } else if (is413 && !_isRetry) {
@@ -1342,6 +1359,20 @@ app.delete('/api/admin/vault/:name', (req, res) => {
   const entries = loadVault().filter(e => e.name !== name)
   saveVault(entries)
   console.log(`[vault] deleted key: ${name}`)
+  res.json({ ok: true })
+})
+
+app.get('/api/admin/vault/:name/reveal', (req, res) => {
+  const name = decodeURIComponent(req.params.name)
+  const entry = loadVault().find(e => e.name === name)
+  if (!entry) return res.status(404).json({ error: 'not found' })
+  const value = decryptVaultValue(entry.encryptedValue)
+  console.log(`[vault] revealed key: ${name}`)
+  res.json({ value })
+})
+
+app.post('/api/admin/render/refresh', (req, res) => {
+  refreshRenderCache().catch(e => console.error('[render] force-refresh error:', e.message))
   res.json({ ok: true })
 })
 
