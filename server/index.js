@@ -1233,6 +1233,7 @@ const RENDER_SERVICES = [
   { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/' },
   { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/' },
   { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/' },
+  { name: 'Voice Trainer',        host: 'voice-trainer.onrender.com',           path: '/health' },
 ]
 
 // In-memory cache — admin status returns this instantly instead of blocking on HTTP polls
