@@ -203,6 +203,13 @@ function makeClient(p) {
 }
 
 const _cooldown = {}
+const _providerStats = {}  // { [name]: { ok: 0, err: 0, lastUsed: null } }
+
+function providerStat(name) {
+  if (!_providerStats[name]) _providerStats[name] = { ok: 0, err: 0, lastUsed: null }
+  return _providerStats[name]
+}
+
 function isCoolingDown(name) {
   return _cooldown[name] && Date.now() < _cooldown[name]
 }
@@ -232,6 +239,7 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
           ...(p.extraParams || {}),
         })
         done = true
+        const s = providerStat(p.name); s.ok++; s.lastUsed = new Date().toISOString()
         return res.choices[0]?.message?.content?.trim() || null
       })(),
       new Promise(resolve => setTimeout(() => {
@@ -243,6 +251,7 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
     done = true
     const is429 = err.status === 429 || err.message?.includes('429')
     const is413 = err.status === 413 || err.message?.includes('413') || err.message?.includes('too large')
+    providerStat(p.name).err++
     if (is429) {
       setCooldown(p.name, 60_000)
     } else if (is413 && !_isRetry) {
@@ -1354,6 +1363,26 @@ app.get('/api/admin/status', async (req, res) => {
   let watchdogLine = 'no log'
   try { watchdogLine = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').pop() } catch {}
 
+  // Syncthing: query local daemon for ATung peer connection + sync completion
+  let syncthing = { connected: null, completion: null, needBytes: null }
+  const ST_KEY = 'g5qXES6Crim3epmQdi4AY7DAFDgHgSYW'
+  const ST_PEER = '2ZVPGNB-EG7JGNQ-RTK27QR-3OQMQMZ-JDBFITZ-IAI6JLD-O6CVF6Q-OBGD7Q3'
+  try {
+    const [connRes, compRes] = await Promise.all([
+      fetch('http://localhost:8384/rest/system/connections', { headers: { 'X-API-Key': ST_KEY }, signal: AbortSignal.timeout(2000) }),
+      fetch(`http://localhost:8384/rest/db/completion?device=${ST_PEER}`, { headers: { 'X-API-Key': ST_KEY }, signal: AbortSignal.timeout(2000) }),
+    ])
+    const connData = await connRes.json()
+    const compData = await compRes.json()
+    const peer = connData.connections?.[ST_PEER]
+    syncthing = {
+      connected: peer?.connected ?? false,
+      address: peer?.address ?? null,
+      completion: compData.completion ?? null,
+      needBytes: compData.needBytes ?? null,
+    }
+  } catch { /* Syncthing unreachable — leave defaults */ }
+
   const ts = Date.now()
   res.json({
     services,
@@ -1363,10 +1392,11 @@ app.get('/api/admin/status', async (req, res) => {
     providers: PROVIDERS.map(p => {
       const coolUntil = _cooldown[p.name]
       const coolingDown = !!(coolUntil && ts < coolUntil)
-      return { name: p.name, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null }
+      const stats = _providerStats[p.name] ?? { ok: 0, err: 0, lastUsed: null }
+      return { name: p.name, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null, stats }
     }),
     watchdog: { lastLine: watchdogLine },
-    syncthing: { healthy: null },
+    syncthing,
     digest: { lastDigestAt: _lastDigestAt },
     storage: 'cockroachdb',
     checkedAt: new Date().toISOString(),

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api.js'
 
 function elapsed(iso) {
@@ -30,6 +30,13 @@ function latencyClass(ms) {
   if (ms < 100) return 'lat-fast'
   if (ms < 400) return 'lat-mid'
   return 'lat-slow'
+}
+
+function LatencyTrend({ delta }) {
+  if (delta == null || Math.abs(delta) <= 10) return null
+  return delta > 0
+    ? <span className="trend-up"> ↑</span>
+    : <span className="trend-down"> ↓</span>
 }
 
 function ExpiryBadge({ expiry }) {
@@ -117,16 +124,20 @@ function HealthStrip({ data }) {
   )
 }
 
-function SectionHeader({ title, ok, total, right }) {
+function SectionHeader({ title, ok, total, right, collapsed, onToggle }) {
+  const hasBadge = total != null && total > 0
   const allOk = ok == null || ok === total
   return (
-    <div className="admin-section-hdr">
-      <span className="admin-section-title">{title}</span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div className="admin-section-hdr" onClick={onToggle} style={onToggle ? { cursor: 'pointer', userSelect: 'none' } : undefined}>
+      <span className="admin-section-title">
+        {onToggle && <span className="admin-collapse-arrow">{collapsed ? '▶' : '▼'}</span>}
+        {title}
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
         {right}
-        {total > 0 && (
+        {hasBadge && (
           <span className={`admin-section-cnt ${allOk ? 'cnt-ok' : 'cnt-warn'}`}>
-            {ok}/{total}
+            {ok != null ? `${ok}/${total}` : total}
           </span>
         )}
       </div>
@@ -138,17 +149,29 @@ export default function AdminDashboard({ onBack }) {
   const [data, setData]         = useState(null)
   const [loading, setLoading]   = useState(true)
   const [restarting, setRestarting] = useState({})
+  const [confirmRestart, setConfirmRestart] = useState(null)
   const [error, setError]       = useState(null)
   const [lastRefresh, setLastRefresh] = useState(null)
+  const prevLatency = useRef({})
 
   const [vault, setVault]       = useState(null)
   const [showVaultForm, setShowVaultForm] = useState(false)
   const [editingKey, setEditingKey] = useState(null)
+  const [collapsed, setCollapsed] = useState({})
+  const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
   const refresh = useCallback(async () => {
     try {
       const [d, v] = await Promise.all([api.getAdminStatus(), api.getVault()])
-      setData(d)
+      // capture latency trends before updating state
+      const next = {}
+      ;[...d.services, ...(d.renderServices || [])].forEach(svc => {
+        const key = svc.label || svc.host
+        const prev = prevLatency.current[key]
+        if (prev != null && svc.latency != null) next[key] = svc.latency - prev
+        prevLatency.current[key] = svc.latency
+      })
+      setData({ ...d, _trends: next })
       setVault(v)
       setLastRefresh(new Date())
       setError(null)
@@ -165,8 +188,19 @@ export default function AdminDashboard({ onBack }) {
     return () => clearInterval(id)
   }, [refresh])
 
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'r' && !e.metaKey && !e.ctrlKey && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+        refresh()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [refresh])
+
   const handleRestart = async (label, name) => {
-    if (!confirm(`Restart ${name}?`)) return
+    if (confirmRestart !== label) { setConfirmRestart(label); return }
+    setConfirmRestart(null)
     setRestarting(r => ({ ...r, [label]: true }))
     try {
       await api.restartService(label)
@@ -202,7 +236,7 @@ export default function AdminDashboard({ onBack }) {
           <span className="admin-refresh-info">
             {lastRefresh ? `updated ${elapsed(lastRefresh.toISOString())}` : ''} · auto-refresh 10s
           </span>
-          <button className="btn btn-sm btn-ai" onClick={refresh}>↺ Refresh</button>
+          <button className="btn btn-sm btn-ai" onClick={refresh} title="Refresh (R)">↺ Refresh</button>
         </div>
         {data && <HealthStrip data={data} />}
       </div>
@@ -219,8 +253,10 @@ export default function AdminDashboard({ onBack }) {
               title="Local Services (chusMBp)"
               ok={data.services.filter(s => s.healthy).length}
               total={data.services.length}
+              collapsed={collapsed.local}
+              onToggle={() => toggleSection('local')}
             />
-            <div className="admin-service-grid-2col">
+            {!collapsed.local && <div className="admin-service-grid-2col">
               {data.services.map(svc => (
                 <div key={svc.label} className={`admin-service-card ${svc.healthy ? 'healthy' : 'unhealthy'}`}>
                   <div className="admin-svc-left">
@@ -228,32 +264,54 @@ export default function AdminDashboard({ onBack }) {
                     <div>
                       <div className="admin-svc-name">{svc.name}</div>
                       <div className="admin-svc-meta">
-                        :{svc.port} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms</span>
+                        :{svc.port} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms<LatencyTrend delta={data._trends?.[svc.label]} /></span>
                       </div>
                     </div>
                   </div>
-                  <button
-                    className="btn btn-sm"
-                    disabled={restarting[svc.label]}
-                    onClick={() => handleRestart(svc.label, svc.name)}
-                  >
-                    {restarting[svc.label] ? '…' : 'Restart'}
-                  </button>
+                  {confirmRestart === svc.label ? (
+                    <span className="admin-restart-confirm">
+                      Sure?
+                      <button className="btn btn-sm btn-danger" onClick={() => handleRestart(svc.label, svc.name)}>✓</button>
+                      <button className="btn btn-sm" onClick={() => setConfirmRestart(null)}>✕</button>
+                    </span>
+                  ) : (
+                    <button
+                      className="btn btn-sm"
+                      disabled={restarting[svc.label]}
+                      onClick={() => handleRestart(svc.label, svc.name)}
+                    >
+                      {restarting[svc.label] ? '…' : 'Restart'}
+                    </button>
+                  )}
                 </div>
               ))}
 
-              {/* ATung Syncthing */}
-              <div className="admin-service-card admin-svc-atung">
-                <div className="admin-svc-left">
-                  <span className="admin-dot dot-info" />
-                  <div>
-                    <div className="admin-svc-name">ATung Syncthing</div>
-                    <div className="admin-svc-meta">monitored by ATung watchdog · Telegram alerts on failure</div>
+              {/* ATung Syncthing — live data from chusMBp Syncthing daemon */}
+              {(() => {
+                const st = data.syncthing
+                const connected = st?.connected
+                const pct = st?.completion
+                const needMB = st?.needBytes ? (st.needBytes / 1_048_576).toFixed(1) : null
+                const dotClass = connected == null ? 'dot-info' : connected ? 'dot-ok' : 'dot-err'
+                const meta = connected == null
+                  ? 'querying…'
+                  : connected
+                    ? `connected · ${pct === 100 ? '✓ in sync' : `${pct?.toFixed(1)}% · ${needMB}MB pending`}`
+                    : 'disconnected — check ATung watchdog'
+                return (
+                  <div className="admin-service-card admin-svc-atung">
+                    <div className="admin-svc-left">
+                      <span className={`admin-dot ${dotClass}`} />
+                      <div>
+                        <div className="admin-svc-name">ATung Syncthing</div>
+                        <div className="admin-svc-meta">{meta}</div>
+                      </div>
+                    </div>
+                    <span className="admin-atung-badge">ATung</span>
                   </div>
-                </div>
-                <span className="admin-atung-badge">ATung</span>
-              </div>
-            </div>
+                )
+              })()}
+            </div>}
           </section>
 
           {/* Render Services */}
@@ -263,30 +321,37 @@ export default function AdminDashboard({ onBack }) {
                 title="Render Services (外部)"
                 ok={data.renderServices.filter(s => s.healthy).length}
                 total={data.renderServices.length}
+                collapsed={collapsed.render}
+                onToggle={() => toggleSection('render')}
                 right={data.renderCacheAge != null && (
                   <span className="admin-svc-meta" style={{ fontSize: 11 }}>
                     cached {data.renderCacheAge < 60 ? `${data.renderCacheAge}s` : `${Math.floor(data.renderCacheAge / 60)}m`} ago · auto-refresh 60s
                   </span>
                 )}
               />
-              <div className="admin-service-grid-2col">
+              {!collapsed.render && <div className="admin-service-grid-2col">
                 {data.renderServices.map(svc => (
-                  <div key={svc.host} className={`admin-service-card ${svc.healthy ? 'healthy' : 'unhealthy'}`}>
+                  <div
+                    key={svc.host}
+                    className={`admin-service-card admin-service-card-link ${svc.healthy ? 'healthy' : 'unhealthy'}`}
+                    onClick={() => window.open(`https://${svc.host}`, '_blank')}
+                    title={`Open https://${svc.host}`}
+                  >
                     <div className="admin-svc-left">
                       <span className={`admin-dot ${svc.healthy ? 'dot-ok' : 'dot-err'}`} />
                       <div>
                         <div className="admin-svc-name">{svc.name}</div>
                         <div className="admin-svc-meta admin-svc-meta-ellipsis">
-                          {svc.host} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms</span>
+                          {svc.host} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms<LatencyTrend delta={data._trends?.[svc.host]} /></span>
                         </div>
                       </div>
                     </div>
                     <span className={`admin-svc-meta render-status-badge ${svc.healthy ? 'render-ok' : 'render-err'}`}>
-                      {svc.healthy ? 'UP' : 'DOWN'}
+                      {svc.healthy ? 'UP ↗' : 'DOWN'}
                     </span>
                   </div>
                 ))}
-              </div>
+              </div>}
             </section>
           )}
 
@@ -296,13 +361,22 @@ export default function AdminDashboard({ onBack }) {
               title="AI Providers"
               ok={data.providers.filter(p => !p.coolingDown).length}
               total={data.providers.length}
+              collapsed={collapsed.providers}
+              onToggle={() => toggleSection('providers')}
             />
-            <div className="admin-provider-grid-3col">
+            {!collapsed.providers && <div className="admin-provider-grid-3col">
               {data.providers.map(p => (
                 <div key={p.name} className={`admin-provider-card ${p.coolingDown ? 'cooling' : 'ready'}`}>
                   <span className={`admin-dot ${p.coolingDown ? 'dot-warn' : 'dot-ok'}`} />
                   <div style={{ minWidth: 0 }}>
-                    <div className="admin-svc-name">{p.name}</div>
+                    <div className="admin-svc-name" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {p.name}
+                      {(p.stats?.ok > 0 || p.stats?.err > 0) && (
+                        <span className="admin-provider-stat">
+                          {p.stats.ok}✓{p.stats.err > 0 && <span className="stat-err"> {p.stats.err}✗</span>}
+                        </span>
+                      )}
+                    </div>
                     <div className="admin-svc-meta admin-svc-meta-ellipsis" style={{ fontFamily: 'monospace', fontSize: 10 }}>
                       {p.model}
                       {p.coolingDown && <span className="admin-cooldown"> · cooling until {new Date(p.cooldownUntil).toLocaleTimeString()}</span>}
@@ -310,22 +384,26 @@ export default function AdminDashboard({ onBack }) {
                   </div>
                 </div>
               ))}
-            </div>
+            </div>}
           </section>
 
           {/* API Key Vault */}
           <section className="admin-section">
-            <div className="admin-section-hdr">
-              <span className="admin-section-title">API Key Vault</span>
-              <div className="vault-header-right">
-                {vault && !vault.vaultKeySet && (
-                  <span className="vault-no-key">⚠️ VAULT_KEY 未設定，值不加密</span>
-                )}
-                <button className="btn btn-sm btn-ai" onClick={() => { setEditingKey(null); setShowVaultForm(v => !v) }}>
-                  {showVaultForm ? '取消' : '+ 新增 Key'}
-                </button>
-              </div>
-            </div>
+            <SectionHeader
+              title="API Key Vault"
+              ok={vault?.entries ? vault.entries.filter(e => !e.expiryWarning).length : null}
+              total={vault?.entries?.length ?? 0}
+              right={
+                <div className="vault-header-right">
+                  {vault && !vault.vaultKeySet && (
+                    <span className="vault-no-key">⚠️ VAULT_KEY 未設定，值不加密</span>
+                  )}
+                  <button className="btn btn-sm btn-ai" onClick={() => { setEditingKey(null); setShowVaultForm(v => !v) }}>
+                    {showVaultForm ? '取消' : '+ 新增 Key'}
+                  </button>
+                </div>
+              }
+            />
 
             {showVaultForm && !editingKey && (
               <VaultForm onSave={handleVaultSave} onCancel={() => setShowVaultForm(false)} />
@@ -373,7 +451,7 @@ export default function AdminDashboard({ onBack }) {
           {/* Watchdog + Digest */}
           <div className="admin-bottom-row">
             <section className="admin-section admin-section-half">
-              <div className="admin-section-title">Watchdog (chusMBp)</div>
+              <SectionHeader title="Watchdog (chusMBp)" />
               <div className="admin-info-card">
                 <div className="admin-svc-meta" style={{ fontFamily: 'monospace', fontSize: 11 }}>
                   {data.watchdog.lastLine}
@@ -382,7 +460,14 @@ export default function AdminDashboard({ onBack }) {
             </section>
 
             <section className="admin-section admin-section-half">
-              <div className="admin-section-title">Morning Digest</div>
+              <SectionHeader
+                title="Morning Digest"
+                right={
+                  <span className="admin-svc-meta" style={{ fontSize: 11 }}>
+                    next {nextDigest(data.digest.lastDigestAt)} · 09:00 Taipei
+                  </span>
+                }
+              />
               <div className="admin-info-card">
                 <div className="admin-svc-name">Last sent</div>
                 <div className="admin-svc-meta">
@@ -390,8 +475,6 @@ export default function AdminDashboard({ onBack }) {
                     ? `${elapsed(data.digest.lastDigestAt)} (${new Date(data.digest.lastDigestAt).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })} Taipei)`
                     : 'Never'}
                 </div>
-                <div className="admin-svc-name" style={{ marginTop: 6 }}>Next run</div>
-                <div className="admin-svc-meta">{nextDigest(data.digest.lastDigestAt)} · 09:00 Taipei</div>
               </div>
             </section>
           </div>
