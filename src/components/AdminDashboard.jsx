@@ -1,6 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api.js'
 
+const PROJECT_ORDER = [
+  'AI PM', '2560戰法', 'Marketing', 'AI Learning', 'Voice Trainer',
+  'ROS', 'Intelligence Journal', 'Travel Advisor', 'Private Network', 'Leave Bot', 'Other'
+]
+const PROJECT_ICONS = {
+  'AI PM': '🏢', '2560戰法': '📈', 'Marketing': '📣', 'AI Learning': '🎓',
+  'Voice Trainer': '🎙', 'ROS': '💬', 'Intelligence Journal': '📰',
+  'Travel Advisor': '✈️', 'Private Network': '🔒', 'Leave Bot': '📅', 'Other': '📦'
+}
+function groupByProject(entries) {
+  const map = {}
+  for (const e of entries) {
+    const p = e.project || 'Other'
+    if (!map[p]) map[p] = []
+    map[p].push(e)
+  }
+  return PROJECT_ORDER.filter(p => map[p]).map(p => ({ project: p, entries: map[p] }))
+}
+
 function elapsed(iso) {
   if (!iso) return '—'
   const s = Math.floor((Date.now() - new Date(iso)) / 1000)
@@ -41,10 +60,10 @@ function latencyClass(ms) {
 }
 
 function renderCacheAgeClass(s) {
-  if (s == null) return 
-  if (s > 90) return cache-stale
-  if (s > 45) return cache-warn
-  return 
+  if (s == null) return ''
+  if (s > 90) return 'cache-stale'
+  if (s > 45) return 'cache-warn'
+  return ''
 }
 
 function LatencyTrend({ delta }) {
@@ -74,18 +93,19 @@ function expiryRowClass(expiry) {
 }
 
 function VaultForm({ onSave, onCancel, initial }) {
-  const [name, setName]        = useState(initial?.name || '')
-  const [desc, setDesc]        = useState(initial?.description || '')
-  const [expiry, setExpiry]    = useState(initial?.expiry?.split('T')[0] || '')
-  const [value, setValue]      = useState('')
-  const [saving, setSaving]    = useState(false)
+  const [name, setName]     = useState(initial?.name || '')
+  const [desc, setDesc]     = useState(initial?.description || '')
+  const [proj, setProj]     = useState(initial?.project || 'AI PM')
+  const [expiry, setExpiry] = useState(initial?.expiry?.split('T')[0] || '')
+  const [value, setValue]   = useState('')
+  const [saving, setSaving] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!name.trim()) return
     setSaving(true)
     try {
-      await onSave({ name: name.trim(), description: desc.trim(), expiry: expiry || null, value: value || undefined })
+      await onSave({ name: name.trim(), description: desc.trim(), project: proj, expiry: expiry || null, value: value || undefined })
     } finally { setSaving(false) }
   }
 
@@ -96,6 +116,9 @@ function VaultForm({ onSave, onCancel, initial }) {
           onChange={e => setName(e.target.value)} disabled={!!initial} required />
         <input className="vault-input" placeholder="說明 (選填)" value={desc}
           onChange={e => setDesc(e.target.value)} />
+        <select className="vault-input vault-input-proj" value={proj} onChange={e => setProj(e.target.value)}>
+          {PROJECT_ORDER.map(p => <option key={p} value={p}>{PROJECT_ICONS[p]} {p}</option>)}
+        </select>
       </div>
       <div className="vault-form-row">
         <input className="vault-input vault-input-date" type="date" value={expiry}
@@ -190,18 +213,20 @@ export default function AdminDashboard({ onBack }) {
   const [showVaultForm, setShowVaultForm] = useState(false)
   const [editingKey, setEditingKey] = useState(null)
   const [collapsed, setCollapsed] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(admin-collapsed) || {}) } catch { return {} }
+    try { return JSON.parse(localStorage.getItem('admin-collapsed') || '{}') } catch { return {} }
   })
-  const [revealedKeys, setRevealedKeys]     = useState({})
-  const [copyingKeys, setCopyingKeys]       = useState({})
+  const [revealedKeys, setRevealedKeys]   = useState({})
+  const [copyingKeys, setCopyingKeys]     = useState({})
   const [refreshingRender, setRefreshingRender] = useState(false)
-  const [vaultSearch, setVaultSearch] = useState()
+  const [sendingDigest, setSendingDigest] = useState(false)
+  const [vaultSearch, setVaultSearch]     = useState('')
+  const [vaultProject, setVaultProject]   = useState('All')
+  const [vaultCollapsed, setVaultCollapsed] = useState({})
   const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
   const refresh = useCallback(async () => {
     try {
       const [d, v] = await Promise.all([api.getAdminStatus(), api.getVault()])
-      // capture latency trends before updating state
       const next = {}
       ;[...d.services, ...(d.renderServices || [])].forEach(svc => {
         const key = svc.label || svc.host
@@ -237,7 +262,7 @@ export default function AdminDashboard({ onBack }) {
   }, [refresh])
 
   useEffect(() => {
-    try { localStorage.setItem(admin-collapsed, JSON.stringify(collapsed)) } catch {}
+    try { localStorage.setItem('admin-collapsed', JSON.stringify(collapsed)) } catch {}
   }, [collapsed])
 
   const handleRestart = async (label, name) => {
@@ -267,6 +292,16 @@ export default function AdminDashboard({ onBack }) {
     await api.deleteVaultKey(name)
     const v = await api.getVault()
     setVault(v)
+  }
+
+  const handleSendDigest = async () => {
+    if (!confirm('立即發送 Morning Digest 到 Telegram？')) return
+    setSendingDigest(true)
+    try {
+      await api.sendDigestNow()
+      setTimeout(refresh, 1500)
+    } catch (e) { alert('Send failed: ' + e.message) }
+    finally { setTimeout(() => setSendingDigest(false), 2000) }
   }
 
   const handleForceRenderRefresh = async () => {
@@ -359,7 +394,7 @@ export default function AdminDashboard({ onBack }) {
                 </div>
               ))}
 
-              {/* ATung Syncthing — live data from chusMBp Syncthing daemon */}
+              {/* ATung Syncthing */}
               {(() => {
                 const st = data.syncthing
                 const connected = st?.connected
@@ -460,8 +495,8 @@ export default function AdminDashboard({ onBack }) {
                     <div className="admin-svc-meta admin-svc-meta-ellipsis" style={{ fontFamily: 'monospace', fontSize: 10 }}>
                       {p.model}
                       {p.coolingDown
-                      ? <span className="admin-cooldown"> · cooling until {new Date(p.cooldownUntil).toLocaleTimeString()}</span>
-                      : p.stats?.lastUsed ? <span> · {elapsed(p.stats.lastUsed)}</span> : null}
+                        ? <span className="admin-cooldown"> · cooling until {new Date(p.cooldownUntil).toLocaleTimeString()}</span>
+                        : p.stats?.lastUsed ? <span> · {elapsed(p.stats.lastUsed)}</span> : null}
                     </div>
                   </div>
                 </div>
@@ -473,7 +508,6 @@ export default function AdminDashboard({ onBack }) {
           <section className="admin-section">
             <SectionHeader
               title="API Key Vault"
-              ok={vault?.entries ? vault.entries.filter(e => !e.expiryWarning).length : null}
               total={vault?.entries?.length ?? 0}
               right={
                 <div className="vault-header-right">
@@ -492,61 +526,81 @@ export default function AdminDashboard({ onBack }) {
             )}
 
             {vault?.entries?.length > 0 && (
-              <input
-                className="vault-search"
-                placeholder="搜尋 Key 名稱或說明…"
-                value={vaultSearch}
-                onChange={e => setVaultSearch(e.target.value)}
-              />
-            )}
-            {vault?.entries?.length > 0 ? (
-              <div className="vault-table">
-                <div className="vault-thead">
-                  <span>名稱</span><span>說明</span><span>值</span><span>到期</span><span></span>
-                </div>
-                {(vaultSearch
-                  ? vault.entries.filter(e =>
-                      e.name.toLowerCase().includes(vaultSearch.toLowerCase()) ||
-                      (e.description || '').toLowerCase().includes(vaultSearch.toLowerCase()))
-                  : vault.entries
-                ).map(e => (
-                  <div key={e.name}>
-                    {editingKey === e.name ? (
-                      <VaultForm
-                        initial={e}
-                        onSave={async (d) => { await handleVaultSave(d); setEditingKey(null) }}
-                        onCancel={() => setEditingKey(null)}
-                      />
-                    ) : (
-                      <div className={`vault-row ${expiryRowClass(e.expiry)}`}>
-                        <span className="vault-cell-name">{e.name}</span>
-                        <span className="vault-cell-desc">{e.description || '—'}</span>
-                        <span className="vault-cell-val" title={revealedKeys[e.name] || undefined}>
-                          {revealedKeys[e.name] != null
-                            ? <span className="vault-val-revealed">{revealedKeys[e.name].length > 38 ? revealedKeys[e.name].slice(0, 38) + '…' : revealedKeys[e.name]}</span>
-                            : (e.maskedValue || '—')}
-                        </span>
-                        <span className="vault-cell-expiry">
-                          {e.expiry ? (
-                            <><ExpiryBadge expiry={e.expiry} /> <span className="admin-svc-meta">{e.expiry.split('T')[0]}</span></>
-                          ) : '—'}
-                        </span>
-                        <span className="vault-cell-actions">
-                          <button className="btn btn-sm vault-btn-icon" title="Copy value" onClick={() => handleCopy(e.name)}>
-                            {copyingKeys[e.name] ? '✓' : '⎘'}
-                          </button>
-                          <button className="btn btn-sm vault-btn-icon" title={revealedKeys[e.name] != null ? 'Hide' : 'Reveal'} onClick={() => handleReveal(e.name)}>
-                            {revealedKeys[e.name] != null ? '●' : '○'}
-                          </button>
-                          <button className="btn btn-sm" onClick={() => setEditingKey(e.name)}>編輯</button>
-                          <button className="btn btn-sm btn-danger" onClick={() => handleVaultDelete(e.name)}>刪除</button>
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                ))}
+              <div className="vault-toolbar">
+                <input
+                  className="vault-search"
+                  placeholder="搜尋 Key 名稱或說明…"
+                  value={vaultSearch}
+                  onChange={e => setVaultSearch(e.target.value)}
+                />
+                <select className="vault-input vault-filter-proj" value={vaultProject} onChange={e => setVaultProject(e.target.value)}>
+                  <option value="All">All Projects</option>
+                  {PROJECT_ORDER.map(p => <option key={p} value={p}>{PROJECT_ICONS[p]} {p}</option>)}
+                </select>
               </div>
-            ) : (
+            )}
+
+            {vault?.entries?.length > 0 ? (() => {
+              const filtered = vault.entries.filter(e =>
+                (vaultProject === 'All' || e.project === vaultProject) &&
+                (!vaultSearch || e.name.toLowerCase().includes(vaultSearch.toLowerCase()) ||
+                  (e.description || '').toLowerCase().includes(vaultSearch.toLowerCase()))
+              )
+              const groups = (vaultSearch || vaultProject !== 'All')
+                ? [{ project: vaultProject === 'All' ? '搜尋結果' : vaultProject, entries: filtered }]
+                : groupByProject(filtered)
+              return groups.map(({ project: grpName, entries: grpEntries }) => (
+                <div key={grpName} className="vault-project-group">
+                  <div className="vault-project-hdr" onClick={() => setVaultCollapsed(c => ({ ...c, [grpName]: !c[grpName] }))}>
+                    <span>{PROJECT_ICONS[grpName] || '📦'} {grpName}</span>
+                    <span className="vault-project-cnt">{vaultCollapsed[grpName] ? '▶' : '▼'} {grpEntries.length}</span>
+                  </div>
+                  {!vaultCollapsed[grpName] && (
+                    <div className="vault-table">
+                      <div className="vault-thead">
+                        <span>名稱</span><span>說明</span><span>值</span><span>到期</span><span></span>
+                      </div>
+                      {grpEntries.map(e => (
+                        <div key={e.name}>
+                          {editingKey === e.name ? (
+                            <VaultForm
+                              initial={e}
+                              onSave={async (d) => { await handleVaultSave(d); setEditingKey(null) }}
+                              onCancel={() => setEditingKey(null)}
+                            />
+                          ) : (
+                            <div className={`vault-row ${expiryRowClass(e.expiry)}`}>
+                              <span className="vault-cell-name">{e.name}</span>
+                              <span className="vault-cell-desc">{e.description || '—'}</span>
+                              <span className="vault-cell-val" title={revealedKeys[e.name] || undefined}>
+                                {revealedKeys[e.name] != null
+                                  ? <span className="vault-val-revealed">{revealedKeys[e.name].length > 38 ? revealedKeys[e.name].slice(0, 38) + '…' : revealedKeys[e.name]}</span>
+                                  : (e.maskedValue || '—')}
+                              </span>
+                              <span className="vault-cell-expiry">
+                                {e.expiry ? (
+                                  <><ExpiryBadge expiry={e.expiry} /> <span className="admin-svc-meta">{e.expiry.split('T')[0]}</span></>
+                                ) : '—'}
+                              </span>
+                              <span className="vault-cell-actions">
+                                <button className="btn btn-sm vault-btn-icon" title="Copy value" onClick={() => handleCopy(e.name)}>
+                                  {copyingKeys[e.name] ? '✓' : '⎘'}
+                                </button>
+                                <button className="btn btn-sm vault-btn-icon" title={revealedKeys[e.name] != null ? 'Hide' : 'Reveal'} onClick={() => handleReveal(e.name)}>
+                                  {revealedKeys[e.name] != null ? '●' : '○'}
+                                </button>
+                                <button className="btn btn-sm" onClick={() => setEditingKey(e.name)}>編輯</button>
+                                <button className="btn btn-sm btn-danger" onClick={() => handleVaultDelete(e.name)}>刪除</button>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))
+            })() : (
               <div className="admin-info-card">
                 <div className="admin-svc-meta">尚未加入任何 Key。點擊「+ 新增 Key」開始管理 API Keys。</div>
               </div>
@@ -557,30 +611,37 @@ export default function AdminDashboard({ onBack }) {
           <div className="admin-bottom-row">
             <section className="admin-section admin-section-half">
               <SectionHeader title="Watchdog (chusMBp)" />
-              {(() => {
-                const { time, message } = parseWatchdogLine(data.watchdog.lastLine)
-                return (
-                  <div className="admin-info-card">
-                    {time && (
-                      <div className="admin-svc-meta" style={{ fontSize: 10, marginBottom: 3 }}>
-                        {elapsed(time.toISOString())} · {time.toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei' })} Taipei
+              <div className="admin-info-card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(data.watchdog.lines || [data.watchdog.lastLine]).map((line, i) => {
+                  const { time, message } = parseWatchdogLine(line)
+                  return (
+                    <div key={i} style={{ opacity: i === 0 ? 1 : 0.55 }}>
+                      {time && (
+                        <div className="admin-svc-meta" style={{ fontSize: 10, marginBottom: 1 }}>
+                          {elapsed(time.toISOString())} · {time.toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei' })} Taipei
+                        </div>
+                      )}
+                      <div className="admin-svc-meta" style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                        {message || line}
                       </div>
-                    )}
-                    <div className="admin-svc-meta" style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                      {message || data.watchdog.lastLine}
                     </div>
-                  </div>
-                )
-              })()}
+                  )
+                })}
+              </div>
             </section>
 
             <section className="admin-section admin-section-half">
               <SectionHeader
                 title="Morning Digest"
                 right={
-                  <span className="admin-svc-meta" style={{ fontSize: 11 }}>
-                    next {nextDigest(data.digest.lastDigestAt)} · 09:00 Taipei
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="admin-svc-meta" style={{ fontSize: 11 }}>
+                      next {nextDigest(data.digest.lastDigestAt)} · 09:00 Taipei
+                    </span>
+                    <button className="btn btn-sm btn-ai" onClick={handleSendDigest} disabled={sendingDigest} title="立即發送">
+                      {sendingDigest ? '…' : '↑ Now'}
+                    </button>
+                  </div>
                 }
               />
               <div className="admin-info-card">

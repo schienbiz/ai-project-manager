@@ -501,3 +501,13 @@ body {
 .vault-form-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .btn-danger { background: rgba(248,81,73,.15) !important; color: var(--danger) !important; border-color: rgba(248,81,73,.3) !important; }
 .btn-danger:hover { background: rgba(248,81,73,.25) !important; }
+
+/* Vault project grouping */
+.vault-toolbar { display: flex; gap: 8px; margin-bottom: 6px; }
+.vault-filter-proj { flex: 0 0 auto; width: 170px; cursor: pointer; }
+.vault-input-proj { flex: 0 0 auto; width: 160px; cursor: pointer; }
+.vault-project-group { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 8px; }
+.vault-project-hdr { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--surface2); cursor: pointer; user-select: none; font-size: 12px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); transition: background .1s; }
+.vault-project-hdr:hover { background: rgba(88,166,255,.06); }
+.vault-project-cnt { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.vault-project-group .vault-table { border: none; border-radius: 0; }

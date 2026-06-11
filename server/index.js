@@ -1111,7 +1111,7 @@ function digestSentToday() {
   return taipeiDay(_lastDigestAt) === taipeiDay(new Date())
 }
 
-async function sendMorningDigest() {
+async function sendMorningDigest(force = false) {
   const botToken = process.env.BOT_TOKEN
   const chatId   = process.env.OWNER_TELEGRAM_ID
   if (!botToken || !chatId) { console.warn('[digest] BOT_TOKEN or OWNER_TELEGRAM_ID not set'); return }
@@ -1198,6 +1198,11 @@ function scheduleNextDigest() {
 app.get('/api/ai/digest/now', async (req, res) => {
   res.json({ ok: true, message: 'Digest sending…' })
   await sendMorningDigest().catch(e => console.error('[digest] manual trigger error:', e.message))
+})
+
+app.post('/api/admin/digest/send-now', async (req, res) => {
+  res.json({ ok: true, message: 'Digest sending…' })
+  await sendMorningDigest(true).catch(e => console.error('[digest] send-now error:', e.message))
 })
 
 // ── Provider status ───────────────────────────────────────────────────────────
@@ -1332,6 +1337,7 @@ app.get('/api/admin/vault', (req, res) => {
       maskedValue: plain ? `••••${plain.slice(-4)}` : (e.encryptedValue ? '••••[encrypted]' : null),
       addedAt: e.addedAt,
       updatedAt: e.updatedAt,
+      project: e.project || Other,
       expiryWarning: e.expiry ? daysUntil(e.expiry) <= 7 : false,
     }
   })
@@ -1343,7 +1349,7 @@ function daysUntil(isoDate) {
 }
 
 app.post('/api/admin/vault', (req, res) => {
-  const { name, description, expiry, value } = req.body
+  const { name, description, expiry, value, project } = req.body
   if (!name || !/^[A-Za-z0-9_\-. ]+$/.test(name)) return res.status(400).json({ error: 'Invalid name' })
   const entries = loadVault()
   const now = new Date().toISOString()
@@ -1352,6 +1358,7 @@ app.post('/api/admin/vault', (req, res) => {
     name: name.trim(),
     description: description?.trim() || '',
     expiry: expiry || null,
+    project: project || (idx >= 0 ? entries[idx].project : Other),
     encryptedValue: value ? encryptVaultValue(value) : (idx >= 0 ? entries[idx].encryptedValue : null),
     addedAt: idx >= 0 ? entries[idx].addedAt : now,
     updatedAt: now,
@@ -1435,7 +1442,7 @@ app.get('/api/admin/status', async (req, res) => {
       const stats = _providerStats[p.name] ?? { ok: 0, err: 0, lastUsed: null }
       return { name: p.name, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null, stats }
     }),
-    watchdog: { lastLine: watchdogLine },
+    watchdog: { lastLine: watchdogLines[0], lines: watchdogLines },
     syncthing,
     digest: { lastDigestAt: _lastDigestAt },
     storage: 'cockroachdb',
