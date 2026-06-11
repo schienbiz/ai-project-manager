@@ -1257,7 +1257,7 @@ async function refreshRenderCache() {
         fetch(`https://${svc.host}${svc.path}`),
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
       ])
-      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 500 }
+      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 400 }
     } catch {
       return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
     }

@@ -40,6 +40,13 @@ function latencyClass(ms) {
   return 'lat-slow'
 }
 
+function renderCacheAgeClass(s) {
+  if (s == null) return 
+  if (s > 90) return cache-stale
+  if (s > 45) return cache-warn
+  return 
+}
+
 function LatencyTrend({ delta }) {
   if (delta == null || Math.abs(delta) <= 10) return null
   return delta > 0
@@ -125,6 +132,10 @@ function HealthStrip({ data }) {
   const avgLatency = healthyLocals.length
     ? Math.round(healthyLocals.reduce((a, s) => a + s.latency, 0) / healthyLocals.length)
     : null
+  const healthyRenders = (data.renderServices || []).filter(s => s.healthy && s.latency != null)
+  const renderAvg = healthyRenders.length
+    ? Math.round(healthyRenders.reduce((a, s) => a + s.latency, 0) / healthyRenders.length)
+    : null
   const allNominal = localHealthy === localTotal && renderHealthy === renderTotal && providerHealthy === providerTotal
 
   return (
@@ -133,7 +144,10 @@ function HealthStrip({ data }) {
       {renderTotal > 0 && <HealthPill label="Render" ok={renderHealthy} total={renderTotal} />}
       {providerTotal > 0 && <HealthPill label="AI" ok={providerHealthy} total={providerTotal} />}
       {avgLatency != null && (
-        <span className={`admin-hp hp-lat ${latencyClass(avgLatency)}`}>avg {avgLatency}ms</span>
+        <span className={`admin-hp hp-lat ${latencyClass(avgLatency)}`}>avg local {avgLatency}ms</span>
+      )}
+      {renderAvg != null && (
+        <span className={`admin-hp hp-lat ${latencyClass(renderAvg)}`}>avg render {renderAvg}ms</span>
       )}
       <span className={`admin-hs-status ${allNominal ? 'hs-ok' : 'hs-warn'}`}>
         {allNominal ? '✓ All nominal' : '⚠ Issues detected'}
@@ -175,10 +189,13 @@ export default function AdminDashboard({ onBack }) {
   const [vault, setVault]       = useState(null)
   const [showVaultForm, setShowVaultForm] = useState(false)
   const [editingKey, setEditingKey] = useState(null)
-  const [collapsed, setCollapsed] = useState({})
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(admin-collapsed) || {}) } catch { return {} }
+  })
   const [revealedKeys, setRevealedKeys]     = useState({})
   const [copyingKeys, setCopyingKeys]       = useState({})
   const [refreshingRender, setRefreshingRender] = useState(false)
+  const [vaultSearch, setVaultSearch] = useState()
   const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
   const refresh = useCallback(async () => {
@@ -218,6 +235,10 @@ export default function AdminDashboard({ onBack }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [refresh])
+
+  useEffect(() => {
+    try { localStorage.setItem(admin-collapsed, JSON.stringify(collapsed)) } catch {}
+  }, [collapsed])
 
   const handleRestart = async (label, name) => {
     if (confirmRestart !== label) { setConfirmRestart(label); return }
@@ -378,7 +399,7 @@ export default function AdminDashboard({ onBack }) {
                 right={
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     {data.renderCacheAge != null && (
-                      <span className="admin-svc-meta" style={{ fontSize: 11 }}>
+                      <span className={`admin-svc-meta ${renderCacheAgeClass(data.renderCacheAge)}`} style={{ fontSize: 11 }}>
                         cached {data.renderCacheAge < 60 ? `${data.renderCacheAge}s` : `${Math.floor(data.renderCacheAge / 60)}m`} ago · auto-refresh 60s
                       </span>
                     )}
@@ -438,7 +459,9 @@ export default function AdminDashboard({ onBack }) {
                     </div>
                     <div className="admin-svc-meta admin-svc-meta-ellipsis" style={{ fontFamily: 'monospace', fontSize: 10 }}>
                       {p.model}
-                      {p.coolingDown && <span className="admin-cooldown"> · cooling until {new Date(p.cooldownUntil).toLocaleTimeString()}</span>}
+                      {p.coolingDown
+                      ? <span className="admin-cooldown"> · cooling until {new Date(p.cooldownUntil).toLocaleTimeString()}</span>
+                      : p.stats?.lastUsed ? <span> · {elapsed(p.stats.lastUsed)}</span> : null}
                     </div>
                   </div>
                 </div>
@@ -468,12 +491,25 @@ export default function AdminDashboard({ onBack }) {
               <VaultForm onSave={handleVaultSave} onCancel={() => setShowVaultForm(false)} />
             )}
 
+            {vault?.entries?.length > 0 && (
+              <input
+                className="vault-search"
+                placeholder="搜尋 Key 名稱或說明…"
+                value={vaultSearch}
+                onChange={e => setVaultSearch(e.target.value)}
+              />
+            )}
             {vault?.entries?.length > 0 ? (
               <div className="vault-table">
                 <div className="vault-thead">
                   <span>名稱</span><span>說明</span><span>值</span><span>到期</span><span></span>
                 </div>
-                {vault.entries.map(e => (
+                {(vaultSearch
+                  ? vault.entries.filter(e =>
+                      e.name.toLowerCase().includes(vaultSearch.toLowerCase()) ||
+                      (e.description || '').toLowerCase().includes(vaultSearch.toLowerCase()))
+                  : vault.entries
+                ).map(e => (
                   <div key={e.name}>
                     {editingKey === e.name ? (
                       <VaultForm
