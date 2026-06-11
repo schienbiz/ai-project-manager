@@ -344,6 +344,7 @@ async function streamGenerate(res, system, userPrompt, maxTokens = 2048) {
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
 
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 10_000)
   try {
     const text = await multiGenerate([
       { role: 'system', content: system },
@@ -358,6 +359,8 @@ async function streamGenerate(res, system, userPrompt, maxTokens = 2048) {
   } catch (err) {
     res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`)
     res.write('data: [DONE]\n\n')
+  } finally {
+    clearInterval(keepAlive)
   }
   res.end()
 }
@@ -1337,7 +1340,7 @@ app.get('/api/admin/vault', (req, res) => {
       maskedValue: plain ? `••••${plain.slice(-4)}` : (e.encryptedValue ? '••••[encrypted]' : null),
       addedAt: e.addedAt,
       updatedAt: e.updatedAt,
-      project: e.project || Other,
+      project: e.project || 'Other',
       expiryWarning: e.expiry ? daysUntil(e.expiry) <= 7 : false,
     }
   })
@@ -1358,7 +1361,7 @@ app.post('/api/admin/vault', (req, res) => {
     name: name.trim(),
     description: description?.trim() || '',
     expiry: expiry || null,
-    project: project || (idx >= 0 ? entries[idx].project : Other),
+    project: project || (idx >= 0 ? entries[idx].project : 'Other'),
     encryptedValue: value ? encryptVaultValue(value) : (idx >= 0 ? entries[idx].encryptedValue : null),
     addedAt: idx >= 0 ? entries[idx].addedAt : now,
     updatedAt: now,
