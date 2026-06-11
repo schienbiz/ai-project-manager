@@ -1407,8 +1407,11 @@ app.get('/api/admin/status', async (req, res) => {
     }
   }))
 
-  let watchdogLine = 'no log'
-  try { watchdogLine = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').pop() } catch {}
+  let watchdogLines = ['no log']
+  try {
+    const allLines = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').filter(Boolean)
+    if (allLines.length) watchdogLines = allLines.slice(-3).reverse()
+  } catch {}
 
   // Syncthing: query local daemon for ATung peer connection + sync completion
   let syncthing = { connected: null, completion: null, needBytes: null }
