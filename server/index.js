@@ -191,6 +191,14 @@ const PROVIDERS = [
     timeout: 30_000,
     fetch: customFetch,
   },
+  ...(process.env.MISTRAL_API_KEY ? [{
+    name: 'Mistral',
+    key: process.env.MISTRAL_API_KEY,
+    baseURL: 'https://api.mistral.ai/v1',
+    model: 'mistral-small-latest',
+    timeout: 15_000,
+    fetch: customFetch,
+  }] : []),
 ]
 
 function makeClient(p) {
