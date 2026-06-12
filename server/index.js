@@ -1558,6 +1558,11 @@ app.post('/api/admin/agent-optimize', async (req, res) => {
         skipped.push(action.service)
         continue
       }
+      if (!action.old_model || action.old_model.length < 5) {
+        step(`⚠️ ${action.service}：old_model "${action.old_model}" 太短，跳過（安全防護）`)
+        skipped.push(action.service)
+        continue
+      }
       let content = fs.readFileSync(svc.file, 'utf-8')
       if (!content.includes(action.old_model)) {
         step(`⚠️ ${action.service} / ${action.provider}：找不到 "${action.old_model}"，跳過`)
