@@ -635,7 +635,7 @@ async function runAgentBackground(taskId, projectId, lang) {
     const typeEmoji = { research: '🔍', write: '✍️', plan: '🗺️' }[type] || '🤖'
     sendTelegram(`🤖 *AI Agent完成*\n\n${typeEmoji} *${task.title}*\n📁 ${project.name}\n\n輸出已就緒，點擊🤖查看並核准。`).catch(() => {})
   } catch (err) {
-    console.error('[agent-bg] error:', err.message)
+    console.error('[agent-bg] error:', err)
     await db.query('UPDATE tasks SET agent_status=$1, updated_at=$2 WHERE id=$3', ['error', now(), taskId]).catch(() => {})
     sendTelegram(`⚠️ *AI Agent錯誤*\n\n*${task?.title || taskId}*\n${err.message}`).catch(() => {})
   }
@@ -673,7 +673,7 @@ app.put('/api/tasks/:id', async (req, res) => {
 
     if (trigger) {
       runAgentBackground(req.params.id, updated.projectId, _lang || 'en').catch(err =>
-        console.error('[agent-bg] unhandled:', err.message)
+        console.error('[agent-bg] unhandled:', err)
       )
     }
   } catch (err) { res.status(500).json({ error: err.message }) }
@@ -689,7 +689,7 @@ app.post('/api/tasks/:id/agent/retry', async (req, res) => {
     const task = rowToTask(rows[0])
     res.json(task)
     runAgentBackground(req.params.id, task.projectId, req.body.lang || 'en').catch(err =>
-      console.error('[agent-bg] retry unhandled:', err.message)
+      console.error('[agent-bg] retry unhandled:', err)
     )
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -1083,7 +1083,7 @@ app.post('/api/ai/agent-run', async (req, res) => {
     await db.query('UPDATE tasks SET agent_type=$1, updated_at=$2 WHERE id=$3', [type, now(), taskId])
     console.log(`[agent] ${type} completed — "${task.title}"`)
   } catch (err) {
-    console.error('[agent] error:', err.message)
+    console.error('[agent] error:', err)
     sseStep(res, `❌ Error: ${err.message}`)
   }
 
@@ -1103,7 +1103,7 @@ async function sendTelegram(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
     })
-  } catch (err) { console.error('[telegram] send error:', err.message) }
+  } catch (err) { console.error('[telegram] send error:', err) }
 }
 
 let _lastDigestAt = null
@@ -1192,7 +1192,7 @@ function scheduleNextDigest() {
     if (digestSentToday()) {
       console.log('[digest] already sent today — skipping duplicate')
     } else {
-      await sendMorningDigest().catch(e => console.error('[digest] error:', e.message))
+      await sendMorningDigest().catch(e => console.error('[digest] error:', e))
     }
     scheduleNextDigest()
   }, ms)
