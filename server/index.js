@@ -1479,6 +1479,127 @@ app.get('/api/admin/ssh-diag', (req, res) => {
   res.json({ sshdUp, borePort: portMatch ? portMatch[1] : null, borelog, boreout })
 })
 
+// ── AI Agent Optimize ────────────────────────────────────────────────────────
+const OPTIMIZABLE_SERVICES = [
+  { name: 'Voice Trainer',    file: `${homedir()}/CloudSync/voice-trainer/server/index.js`,        label: 'com.voice-trainer',           selfRestart: false },
+  { name: 'AI Learning Tool', file: `${homedir()}/CloudSync/ai-learning-tool/server.js`,           label: 'com.ai-learning-tool.dev',    selfRestart: false },
+  { name: 'Marketing Asst',   file: `${homedir()}/CloudSync/marketing-assistant/server.js`,        label: 'com.marketing-assistant.dev', selfRestart: false },
+  { name: 'AI PM',            file: `${homedir()}/CloudSync/ai-project-manager/server/index.js`,   label: 'com.ai-project-manager.dev',  selfRestart: true  },
+]
+
+app.post('/api/admin/agent-optimize', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  const step = (text) => res.write(`data: ${JSON.stringify({ type: 'step', text })}\n\n`)
+  const out  = (text) => res.write(`data: ${JSON.stringify({ type: 'output', text })}\n\n`)
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 10_000)
+  let selfRestartNeeded = false
+
+  try {
+    const { analysisText } = req.body
+    if (!analysisText) { step('❌ 缺少分析內容'); res.write('data: [DONE]\n\n'); return }
+
+    step('🧠 解析優化計畫...')
+    const planRaw = await multiGenerate([
+      {
+        role: 'system',
+        content: `你是 AI 自動化優化系統。只回傳 JSON，不要任何說明。格式：
+{
+  "actions": [
+    {
+      "service": "服務名稱 (Voice Trainer / AI Learning Tool / Marketing Asst / AI PM)",
+      "provider": "Provider 名稱 (Groq/Cerebras/NVIDIA/Mistral/OpenRouter/Qwen3)",
+      "old_model": "目前使用的完整 model ID (必須完全符合程式碼中的字串)",
+      "new_model": "要更新到的完整 model ID",
+      "reason": "一句話說明原因"
+    }
+  ],
+  "skip_reason": "如果沒有需要更新的項目，填原因；否則填空字串"
+}
+服務名稱必須完全符合上述選項之一。只包含有明確改善效果且確定正確的更新。`
+      },
+      {
+        role: 'user',
+        content: `根據以下分析，列出可立即套用的 model 更新。old_model 必須是程式碼中確切存在的字串：\n\n${analysisText}`
+      }
+    ], 400)
+
+    let plan = { actions: [], skip_reason: '' }
+    try {
+      const m = planRaw.match(/\{[\s\S]*\}/)
+      if (m) plan = JSON.parse(m[0])
+    } catch {
+      step('⚠️ 無法解析優化計畫')
+      out(planRaw)
+      res.write('data: [DONE]\n\n')
+      return
+    }
+
+    if (!plan.actions?.length) {
+      out(`✅ 無需自動優化${plan.skip_reason ? '：' + plan.skip_reason : ''}`)
+      res.write('data: [DONE]\n\n')
+      return
+    }
+
+    step(`📋 計畫套用 ${plan.actions.length} 項更新...`)
+    const applied = [], skipped = []
+
+    for (const action of plan.actions) {
+      const svc = OPTIMIZABLE_SERVICES.find(s => s.name === action.service)
+      if (!svc) {
+        step(`⏭️ ${action.service}：Render 服務，跳過（需手動更新）`)
+        skipped.push(action.service)
+        continue
+      }
+      if (!fs.existsSync(svc.file)) {
+        step(`⚠️ ${action.service}：找不到檔案`)
+        skipped.push(action.service)
+        continue
+      }
+      let content = fs.readFileSync(svc.file, 'utf-8')
+      if (!content.includes(action.old_model)) {
+        step(`⚠️ ${action.service} / ${action.provider}：找不到 "${action.old_model}"，跳過`)
+        skipped.push(action.service)
+        continue
+      }
+      content = content.replaceAll(action.old_model, action.new_model)
+      fs.writeFileSync(svc.file, content, 'utf-8')
+      step(`✅ ${action.service} / ${action.provider}：${action.old_model} → ${action.new_model}`)
+      applied.push(svc)
+    }
+
+    // Restart affected services (defer self-restart until after SSE ends)
+    for (const svc of [...new Map(applied.map(s => [s.label, s])).values()]) {
+      if (svc.selfRestart) { selfRestartNeeded = true; step(`♻️ AI PM 將在串流結束後重啟`); continue }
+      try {
+        execSync(`launchctl kickstart -k gui/501/${svc.label}`, { timeout: 5000 })
+        step(`♻️ ${svc.name} 重啟完成`)
+      } catch (e) { step(`⚠️ ${svc.name} 重啟失敗：${e.message}`) }
+    }
+
+    const summary = [
+      applied.length  ? `✅ 已更新 ${applied.length} 項：${applied.map(s => s.name).join('、')}` : null,
+      skipped.length  ? `⏭️ 跳過 ${skipped.length} 項：${skipped.join('、')}` : null,
+      selfRestartNeeded ? `⚠️ AI PM 已更新，即將重啟（頁面會短暫斷線）` : null,
+    ].filter(Boolean).join('\n')
+    out(summary)
+    res.write('data: [DONE]\n\n')
+  } catch (err) {
+    step(`❌ 優化失敗：${err.message}`)
+    res.write('data: [DONE]\n\n')
+  } finally {
+    clearInterval(keepAlive)
+    res.end()
+    if (selfRestartNeeded) {
+      setTimeout(() => {
+        try { execSync('launchctl kickstart -k gui/501/com.ai-project-manager.dev', { timeout: 5000 }) } catch {}
+      }, 1500)
+    }
+  }
+})
+
 // ── AI Agent Analysis ─────────────────────────────────────────────────────────
 app.post('/api/admin/agent-analysis', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')

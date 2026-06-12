@@ -224,6 +224,9 @@ export default function AdminDashboard({ onBack }) {
   const [auditOutput, setAuditOutput]         = useState('')
   const [agentAnalysisRunning, setAgentAnalysisRunning] = useState(false)
   const [agentAnalysisOutput, setAgentAnalysisOutput]   = useState('')
+  const [optimizeRunning, setOptimizeRunning]           = useState(false)
+  const [optimizeSteps, setOptimizeSteps]               = useState([])
+  const [optimizeOutput, setOptimizeOutput]             = useState('')
   const [vaultSearch, setVaultSearch]     = useState('')
   const [vaultProject, setVaultProject]   = useState('All')
   const [vaultCollapsed, setVaultCollapsed] = useState({})
@@ -312,6 +315,8 @@ export default function AdminDashboard({ onBack }) {
   const handleAgentAnalysis = useCallback(async () => {
     setAgentAnalysisRunning(true)
     setAgentAnalysisOutput('')
+    setOptimizeSteps([])
+    setOptimizeOutput('')
     await streamAgent(
       '/pm/api/admin/agent-analysis',
       {},
@@ -319,6 +324,20 @@ export default function AdminDashboard({ onBack }) {
       (chunk) => setAgentAnalysisOutput(prev => prev + chunk),
       () => setAgentAnalysisRunning(false),
       (err) => { setAgentAnalysisOutput(`❌ 錯誤: ${err}`); setAgentAnalysisRunning(false) }
+    )
+  }, [])
+
+  const handleOptimize = useCallback(async (analysisText) => {
+    setOptimizeRunning(true)
+    setOptimizeSteps([])
+    setOptimizeOutput('')
+    await streamAgent(
+      '/pm/api/admin/agent-optimize',
+      { analysisText },
+      (s) => setOptimizeSteps(prev => [...prev, s]),
+      (chunk) => setOptimizeOutput(prev => prev + chunk),
+      () => setOptimizeRunning(false),
+      (err) => { setOptimizeSteps(prev => [...prev, `❌ 錯誤: ${err}`]); setOptimizeRunning(false) }
     )
   }, [])
 
@@ -561,6 +580,26 @@ export default function AdminDashboard({ onBack }) {
             {agentAnalysisOutput && (
               <div className="audit-panel" style={{ marginBottom: 8 }}>
                 <div className="audit-output">{agentAnalysisOutput}</div>
+                {!agentAnalysisRunning && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                    <button
+                      className="btn btn-sm btn-ai"
+                      onClick={() => handleOptimize(agentAnalysisOutput)}
+                      disabled={optimizeRunning}
+                    >
+                      {optimizeRunning ? '優化中…' : '⚡ 自動優化'}
+                    </button>
+                    {optimizeRunning && <span className="admin-svc-meta" style={{ fontSize: 11 }}>正在套用更新並重啟服務…</span>}
+                  </div>
+                )}
+                {(optimizeSteps.length > 0 || optimizeOutput) && (
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div className="audit-steps">
+                      {optimizeSteps.map((s, i) => <div key={i} className="audit-step">{s}</div>)}
+                    </div>
+                    {optimizeOutput && <div className="audit-output" style={{ marginTop: 4 }}>{optimizeOutput}</div>}
+                  </div>
+                )}
               </div>
             )}
 
