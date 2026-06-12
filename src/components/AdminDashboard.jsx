@@ -213,15 +213,17 @@ export default function AdminDashboard({ onBack }) {
   const [showVaultForm, setShowVaultForm] = useState(false)
   const [editingKey, setEditingKey] = useState(null)
   const [collapsed, setCollapsed] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('admin-collapsed') || '{}') } catch { return {} }
+    try { const s = JSON.parse(localStorage.getItem('admin-collapsed') || '{}'); return { vault: true, ...s } } catch { return { vault: true } }
   })
   const [revealedKeys, setRevealedKeys]   = useState({})
   const [copyingKeys, setCopyingKeys]     = useState({})
   const [refreshingRender, setRefreshingRender] = useState(false)
   const [sendingDigest, setSendingDigest] = useState(false)
-  const [auditRunning, setAuditRunning]   = useState(false)
-  const [auditSteps, setAuditSteps]       = useState([])
-  const [auditOutput, setAuditOutput]     = useState('')
+  const [auditRunning, setAuditRunning]       = useState(false)
+  const [auditSteps, setAuditSteps]           = useState([])
+  const [auditOutput, setAuditOutput]         = useState('')
+  const [agentAnalysisRunning, setAgentAnalysisRunning] = useState(false)
+  const [agentAnalysisOutput, setAgentAnalysisOutput]   = useState('')
   const [vaultSearch, setVaultSearch]     = useState('')
   const [vaultProject, setVaultProject]   = useState('All')
   const [vaultCollapsed, setVaultCollapsed] = useState({})
@@ -306,6 +308,19 @@ export default function AdminDashboard({ onBack }) {
     } catch (e) { alert('Send failed: ' + e.message) }
     finally { setTimeout(() => setSendingDigest(false), 2000) }
   }
+
+  const handleAgentAnalysis = useCallback(async () => {
+    setAgentAnalysisRunning(true)
+    setAgentAnalysisOutput('')
+    await streamAgent(
+      '/pm/api/admin/agent-analysis',
+      {},
+      null,
+      (chunk) => setAgentAnalysisOutput(prev => prev + chunk),
+      () => setAgentAnalysisRunning(false),
+      (err) => { setAgentAnalysisOutput(`❌ 錯誤: ${err}`); setAgentAnalysisRunning(false) }
+    )
+  }, [])
 
   const handleRunAudit = useCallback(async () => {
     setAuditRunning(true)
@@ -526,23 +541,34 @@ export default function AdminDashboard({ onBack }) {
             <SectionHeader
               title="API Key Vault"
               total={vault?.entries?.length ?? 0}
+              collapsed={collapsed.vault}
+              onToggle={() => toggleSection('vault')}
               right={
                 <div className="vault-header-right">
                   {vault && !vault.vaultKeySet && (
                     <span className="vault-no-key">⚠️ VAULT_KEY 未設定，值不加密</span>
                   )}
-                  <button className="btn btn-sm btn-ai" onClick={() => { setEditingKey(null); setShowVaultForm(v => !v) }}>
+                  <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); handleAgentAnalysis() }} disabled={agentAnalysisRunning} title="分析 AI Agent 服務是否需要更新">
+                    {agentAnalysisRunning ? '分析中…' : '🤖 分析更新'}
+                  </button>
+                  <button className="btn btn-sm btn-ai" onClick={(e) => { e.stopPropagation(); setEditingKey(null); setShowVaultForm(v => !v) }}>
                     {showVaultForm ? '取消' : '+ 新增 Key'}
                   </button>
                 </div>
               }
             />
 
-            {showVaultForm && !editingKey && (
+            {agentAnalysisOutput && (
+              <div className="audit-panel" style={{ marginBottom: 8 }}>
+                <div className="audit-output">{agentAnalysisOutput}</div>
+              </div>
+            )}
+
+            {!collapsed.vault && showVaultForm && !editingKey && (
               <VaultForm onSave={handleVaultSave} onCancel={() => setShowVaultForm(false)} />
             )}
 
-            {vault?.entries?.length > 0 && (
+            {!collapsed.vault && vault?.entries?.length > 0 && (
               <div className="vault-toolbar">
                 <input
                   className="vault-search"
@@ -557,7 +583,7 @@ export default function AdminDashboard({ onBack }) {
               </div>
             )}
 
-            {vault?.entries?.length > 0 ? (() => {
+            {!collapsed.vault && vault?.entries?.length > 0 ? (() => {
               const filtered = vault.entries.filter(e =>
                 (vaultProject === 'All' || e.project === vaultProject) &&
                 (!vaultSearch || e.name.toLowerCase().includes(vaultSearch.toLowerCase()) ||
@@ -618,9 +644,11 @@ export default function AdminDashboard({ onBack }) {
                 </div>
               ))
             })() : (
-              <div className="admin-info-card">
-                <div className="admin-svc-meta">尚未加入任何 Key。點擊「+ 新增 Key」開始管理 API Keys。</div>
-              </div>
+              !collapsed.vault && (
+                <div className="admin-info-card">
+                  <div className="admin-svc-meta">尚未加入任何 Key。點擊「+ 新增 Key」開始管理 API Keys。</div>
+                </div>
+              )
             )}
           </section>
 

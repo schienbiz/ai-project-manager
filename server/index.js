@@ -1479,6 +1479,94 @@ app.get('/api/admin/ssh-diag', (req, res) => {
   res.json({ sshdUp, borePort: portMatch ? portMatch[1] : null, borelog, boreout })
 })
 
+// ── AI Agent Analysis ─────────────────────────────────────────────────────────
+app.post('/api/admin/agent-analysis', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  const out = (text) => res.write(`data: ${JSON.stringify({ type: 'output', text })}\n\n`)
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 10_000)
+
+  try {
+    const ts = Date.now()
+    const vaultEntries = loadVault()
+    const expiringKeys = vaultEntries.filter(e => e.expiry && daysUntil(e.expiry) <= 30)
+
+    const providerLines = PROVIDERS.map(p => {
+      const coolUntil = _cooldown[p.name]
+      const coolingDown = !!(coolUntil && ts < coolUntil)
+      const stats = _providerStats[p.name] ?? { ok: 0, err: 0, lastUsed: null }
+      const lastUsed = stats.lastUsed ? new Date(stats.lastUsed).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }) : '未使用'
+      return `• ${p.name} (${p.model}): ${stats.ok} 成功 / ${stats.err} 失敗，最後使用 ${lastUsed}${coolingDown ? ' ⚠️ cooling down' : ''}`
+    }).join('\n')
+
+    const keysByProject = {}
+    for (const e of vaultEntries) {
+      const proj = e.project || 'Other'
+      if (!keysByProject[proj]) keysByProject[proj] = []
+      keysByProject[proj].push(e.name)
+    }
+    const vaultSummary = Object.entries(keysByProject)
+      .map(([proj, keys]) => `• ${proj}: ${keys.join(', ')}`)
+      .join('\n')
+
+    const expiryWarning = expiringKeys.length
+      ? `\n即將到期的 Key (30天內):\n${expiringKeys.map(e => `• ${e.name} — ${daysUntil(e.expiry) < 0 ? '已過期' : `${daysUntil(e.expiry)}天後`}`).join('\n')}`
+      : '\n無即將到期的 Key。'
+
+    const prompt = `你是 AI 工程顧問，負責審查以下多專案 AI agent 架構，判斷是否需要更新。
+
+## 當前 AI PM 配置的 Provider（本機 chusMBp）
+${providerLines}
+
+## Vault 各專案 API Key 分佈
+${vaultSummary}
+${expiryWarning}
+
+## 各專案 AI Agent 現況（2026-06 已知）
+• **Relationship OS (ROS)**: Groq Qwen3-32b (Blindspot 分析)
+• **Intelligence Journal**: Groq Llama4-Scout → Cerebras gpt-oss-120b → NVIDIA Llama3.3-70b → Mistral-large (週報分析，串流)
+• **Voice Trainer**: Groq + Cerebras + NVIDIA + Mistral + OpenRouter (5 providers，語音教練)
+• **AI Learning Tool**: Groq Scout4 + Qwen3 + Cerebras gather；OpenRouter Llama4-Maverick fallback
+• **AI PM**: Groq Scout + Cerebras + Qwen3 + NVIDIA + Mistral (5 providers，PM agents + digest)
+• **Marketing Assistant**: Mistral 為主，另有備援
+• **2560戰法**: 無 AI agent（純市場訊號）
+• **Travel Advisor**: gather-synthesis 架構，多 provider race
+• **Private Network**: 無 AI agent
+
+## 分析任務
+請依以下結構，給出具體建議：
+
+1. **模型更新建議** — 哪些專案的模型有更好的替代方案？列出具體的 model ID 和理由（考慮速度/成本/能力）
+2. **Provider 結構優化** — 哪些專案 provider 配置不夠健壯或有冗餘？
+3. **到期 Key 行動** — 需要立即處理的 key 更新
+4. **優先順序** — 標出 🔴 立即處理 / 🟡 本週內 / 🟢 可觀察
+
+繁體中文，具體可執行，不超過 400 字。`
+
+    let text = ''
+    try {
+      text = await multiGenerate([
+        { role: 'system', content: '你是 AI 基礎架構顧問，專注於 LLM provider 選型與 agent 架構最佳化。給出具體、可操作的建議。' },
+        { role: 'user', content: prompt },
+      ], 600)
+    } catch (e) {
+      text = `分析失敗: ${e.message}`
+    }
+
+    const CHUNK = 12
+    for (let i = 0; i < text.length; i += CHUNK) out(text.slice(i, i + CHUNK))
+    res.write('data: [DONE]\n\n')
+  } catch (err) {
+    out(`分析失敗: ${err.message}`)
+    res.write('data: [DONE]\n\n')
+  } finally {
+    clearInterval(keepAlive)
+    res.end()
+  }
+})
+
 // ── System Audit ─────────────────────────────────────────────────────────────
 app.post('/api/admin/audit', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')
