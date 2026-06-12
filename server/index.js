@@ -1238,6 +1238,7 @@ const ADMIN_SERVICES = [
   { name: 'Proxy',            label: 'com.proxy.marketing',         port: 3002, path: '/' },
   { name: 'AI Learning Tool', label: 'com.ai-learning-tool.dev',    port: 3003, path: '/health' },
   { name: 'AI PM',            label: 'com.ai-project-manager.dev',  port: 3004, path: '/pm/api/status' },
+  { name: 'Voice Trainer',    label: 'com.voice-trainer',           port: 3005, path: '/health' },
 ]
 
 const ALLOWED_LABELS = new Set(ADMIN_SERVICES.map(s => s.label))
@@ -1476,6 +1477,110 @@ app.get('/api/admin/ssh-diag', (req, res) => {
   try { boreout = fs.readFileSync('/tmp/bore-ssh-output.log', 'utf-8').trim().slice(-500) } catch {}
   const portMatch = boreout.match(/bore\.pub:(\d+)/)
   res.json({ sshdUp, borePort: portMatch ? portMatch[1] : null, borelog, boreout })
+})
+
+// ── System Audit ─────────────────────────────────────────────────────────────
+app.post('/api/admin/audit', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  const step = (text) => res.write(`data: ${JSON.stringify({ type: 'step', text })}\n\n`)
+  const out  = (text) => res.write(`data: ${JSON.stringify({ type: 'output', text })}\n\n`)
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 10_000)
+
+  try {
+    step('🔍 Checking local services (chusMBp)...')
+    const localResults = await Promise.all(ADMIN_SERVICES.map(async (svc) => {
+      const t0 = Date.now()
+      try {
+        const r = await Promise.race([
+          fetch(`http://localhost:${svc.port}${svc.path}`),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
+        ])
+        const latency = Date.now() - t0
+        const healthy = r.status < 400
+        step(`${healthy ? '✅' : '❌'} ${svc.name} (:${svc.port}) — ${r.status} (${latency}ms)`)
+        return { ...svc, status: r.status, latency, healthy }
+      } catch {
+        const latency = Date.now() - t0
+        step(`❌ ${svc.name} (:${svc.port}) — unreachable`)
+        return { ...svc, status: 0, latency, healthy: false }
+      }
+    }))
+
+    step('🌐 Checking Render services (live)...')
+    const renderResults = await Promise.all(RENDER_SERVICES.map(async (svc) => {
+      const t0 = Date.now()
+      try {
+        const r = await Promise.race([
+          fetch(`https://${svc.host}${svc.path}`),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
+        ])
+        const latency = Date.now() - t0
+        const healthy = r.status < 400
+        step(`${healthy ? '✅' : '❌'} ${svc.name} — ${r.status} (${latency}ms)`)
+        return { ...svc, healthy, latency, status: r.status }
+      } catch {
+        const latency = Date.now() - t0
+        step(`❌ ${svc.name} — timeout (${latency}ms)`)
+        return { ...svc, healthy: false, latency, status: 0 }
+      }
+    }))
+
+    step('🤖 Checking AI providers...')
+    const ts = Date.now()
+    const providerStatus = PROVIDERS.map(p => {
+      const coolingDown = !!(p.key && _cooldown[p.name] && ts < _cooldown[p.name])
+      const stats = _providerStats[p.name] ?? { ok: 0, err: 0 }
+      const icon = !p.key ? '⚪' : coolingDown ? '⚠️' : '✅'
+      step(`${icon} ${p.name} — ${!p.key ? 'no key' : coolingDown ? 'cooling down' : `ok (${stats.ok}✓ ${stats.err}✗)`}`)
+      return { name: p.name, configured: !!p.key, coolingDown, stats }
+    })
+
+    step('🧠 AI analyzing...')
+    const localHealthy  = localResults.filter(s => s.healthy).length
+    const renderHealthy = renderResults.filter(s => s.healthy).length
+    const providersOk   = providerStatus.filter(p => p.configured && !p.coolingDown).length
+
+    const prompt = `系統健康報告 — ${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}
+
+本機服務 (chusMBp) — ${localHealthy}/${localResults.length} 正常:
+${localResults.map(s => `${s.healthy ? '✅' : '❌'} ${s.name} (:${s.port}): ${s.healthy ? `${s.latency}ms` : 'DOWN'}`).join('\n')}
+
+Render 服務 — ${renderHealthy}/${renderResults.length} 正常:
+${renderResults.map(s => `${s.healthy ? '✅' : '❌'} ${s.name}: ${s.healthy ? `${s.latency}ms` : 'DOWN'} (${s.host})`).join('\n')}
+
+AI Provider — ${providersOk}/${providerStatus.length} 可用:
+${providerStatus.map(p => `${!p.configured ? '⚪' : p.coolingDown ? '⚠️' : '✅'} ${p.name}: ${!p.configured ? 'no key' : p.coolingDown ? 'cooling down' : `${p.stats.ok} calls, ${p.stats.err} errors`}`).join('\n')}
+
+請提供簡潔評估：
+1. **整體狀態** — 🟢正常 / 🟡注意 / 🔴異常，一句話
+2. **問題項目** — 不健康的服務與可能原因（全部正常則寫「無」）
+3. **建議行動** — 具體下一步（全部正常則寫「無需操作」）
+
+繁體中文，精簡，不超過 150 字。`
+
+    let aiText = ''
+    try {
+      aiText = await multiGenerate([
+        { role: 'system', content: '你是系統監控專家。分析健康報告，提供精簡建議。' },
+        { role: 'user', content: prompt },
+      ], 400)
+    } catch (e) {
+      aiText = `AI 分析失敗: ${e.message}`
+    }
+
+    const CHUNK = 12
+    for (let i = 0; i < aiText.length; i += CHUNK) out(aiText.slice(i, i + CHUNK))
+    res.write('data: [DONE]\n\n')
+  } catch (err) {
+    step(`❌ 稽核失敗: ${err.message}`)
+    res.write('data: [DONE]\n\n')
+  } finally {
+    clearInterval(keepAlive)
+    res.end()
+  }
 })
 
 // ── Frontend ──────────────────────────────────────────────────────────────────

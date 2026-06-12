@@ -511,3 +511,9 @@ body {
 .vault-project-hdr:hover { background: rgba(88,166,255,.06); }
 .vault-project-cnt { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .vault-project-group .vault-table { border: none; border-radius: 0; }
+
+/* Audit panel */
+.audit-panel { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.audit-steps { display: flex; flex-direction: column; gap: 3px; }
+.audit-step { font-family: monospace; font-size: 11px; color: var(--muted); }
+.audit-output { font-size: 12px; color: var(--text); white-space: pre-wrap; line-height: 1.6; border-top: 1px solid var(--border); padding-top: 10px; }

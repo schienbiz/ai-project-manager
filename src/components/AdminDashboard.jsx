@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api } from '../api.js'
+import { api, streamAgent } from '../api.js'
 
 const PROJECT_ORDER = [
   'AI PM', '2560戰法', 'Marketing', 'AI Learning', 'Voice Trainer',
@@ -219,6 +219,9 @@ export default function AdminDashboard({ onBack }) {
   const [copyingKeys, setCopyingKeys]     = useState({})
   const [refreshingRender, setRefreshingRender] = useState(false)
   const [sendingDigest, setSendingDigest] = useState(false)
+  const [auditRunning, setAuditRunning]   = useState(false)
+  const [auditSteps, setAuditSteps]       = useState([])
+  const [auditOutput, setAuditOutput]     = useState('')
   const [vaultSearch, setVaultSearch]     = useState('')
   const [vaultProject, setVaultProject]   = useState('All')
   const [vaultCollapsed, setVaultCollapsed] = useState({})
@@ -303,6 +306,20 @@ export default function AdminDashboard({ onBack }) {
     } catch (e) { alert('Send failed: ' + e.message) }
     finally { setTimeout(() => setSendingDigest(false), 2000) }
   }
+
+  const handleRunAudit = useCallback(async () => {
+    setAuditRunning(true)
+    setAuditSteps([])
+    setAuditOutput('')
+    await streamAgent(
+      '/pm/api/admin/audit',
+      {},
+      (s) => setAuditSteps(prev => [...prev, s]),
+      (chunk) => setAuditOutput(prev => prev + chunk),
+      () => setAuditRunning(false),
+      (err) => { setAuditSteps(prev => [...prev, `❌ 錯誤: ${err}`]); setAuditRunning(false) }
+    )
+  }, [])
 
   const handleForceRenderRefresh = async () => {
     setRefreshingRender(true)
@@ -654,6 +671,30 @@ export default function AdminDashboard({ onBack }) {
               </div>
             </section>
           </div>
+
+          {/* 全系統稽核 */}
+          <section className="admin-section">
+            <SectionHeader
+              title="全系統稽核"
+              right={
+                <button className="btn btn-sm btn-ai" onClick={handleRunAudit} disabled={auditRunning}>
+                  {auditRunning ? '稽核中…' : '▶ 執行稽核'}
+                </button>
+              }
+            />
+            {(auditSteps.length > 0 || auditOutput) && (
+              <div className="audit-panel">
+                <div className="audit-steps">
+                  {auditSteps.map((s, i) => (
+                    <div key={i} className="audit-step">{s}</div>
+                  ))}
+                </div>
+                {auditOutput && (
+                  <div className="audit-output">{auditOutput}</div>
+                )}
+              </div>
+            )}
+          </section>
 
         </div>
       )}
