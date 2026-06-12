@@ -1563,14 +1563,29 @@ app.post('/api/admin/agent-optimize', async (req, res) => {
         skipped.push(action.service)
         continue
       }
+      if (!action.new_model || action.new_model.length < 5) {
+        step(`⚠️ ${action.service}：new_model "${action.new_model}" 太短，跳過（安全防護）`)
+        skipped.push(action.service)
+        continue
+      }
       let content = fs.readFileSync(svc.file, 'utf-8')
       if (!content.includes(action.old_model)) {
         step(`⚠️ ${action.service} / ${action.provider}：找不到 "${action.old_model}"，跳過`)
         skipped.push(action.service)
         continue
       }
-      content = content.replaceAll(action.old_model, action.new_model)
-      fs.writeFileSync(svc.file, content, 'utf-8')
+      const bakPath = svc.file + '.bak'
+      fs.writeFileSync(bakPath, content, 'utf-8')
+      const updated = content.replaceAll(action.old_model, action.new_model)
+      fs.writeFileSync(svc.file, updated, 'utf-8')
+      try {
+        execSync(`node --check "${svc.file}"`, { timeout: 5000 })
+      } catch (e) {
+        fs.writeFileSync(svc.file, content, 'utf-8')
+        step(`⚠️ ${action.service}：語法錯誤，已還原（${e.message.split('\n')[0]}）`)
+        skipped.push(action.service)
+        continue
+      }
       step(`✅ ${action.service} / ${action.provider}：${action.old_model} → ${action.new_model}`)
       applied.push(svc)
     }
