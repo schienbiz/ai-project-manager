@@ -1487,6 +1487,41 @@ const OPTIMIZABLE_SERVICES = [
   { name: 'AI PM',            file: `${homedir()}/CloudSync/ai-project-manager/server/index.js`,   label: 'com.ai-project-manager.dev',  selfRestart: true  },
 ]
 
+// Preview endpoint — returns parsed actions as JSON without applying anything
+app.post('/api/admin/agent-optimize/preview', async (req, res) => {
+  try {
+    const { analysisText } = req.body
+    if (!analysisText) return res.status(400).json({ error: '缺少分析內容' })
+
+    const planRaw = await multiGenerate([
+      {
+        role: 'system',
+        content: `你是 AI 自動化優化系統。只回傳 JSON，不要任何說明。格式：
+{
+  "actions": [
+    {
+      "service": "服務名稱 (Voice Trainer / AI Learning Tool / Marketing Asst / AI PM)",
+      "provider": "Provider 名稱 (Groq/Cerebras/NVIDIA/Mistral/OpenRouter/Qwen3)",
+      "old_model": "目前使用的完整 model ID (必須完全符合程式碼中的字串)",
+      "new_model": "要更新到的完整 model ID",
+      "reason": "一句話說明原因"
+    }
+  ],
+  "skip_reason": "如果沒有需要更新的項目，填原因；否則填空字串"
+}
+服務名稱必須完全符合上述選項之一。只包含有明確改善效果且確定正確的更新。`
+      },
+      { role: 'user', content: `根據以下分析，列出可立即套用的 model 更新。old_model 必須是程式碼中確切存在的字串：\n\n${analysisText}` }
+    ], 400)
+
+    let plan = { actions: [], skip_reason: '' }
+    try { const m = planRaw.match(/\{[\s\S]*\}/); if (m) plan = JSON.parse(m[0]) } catch { /* ignore */ }
+    res.json(plan)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.post('/api/admin/agent-optimize', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
@@ -1498,11 +1533,17 @@ app.post('/api/admin/agent-optimize', async (req, res) => {
   let selfRestartNeeded = false
 
   try {
-    const { analysisText } = req.body
-    if (!analysisText) { step('❌ 缺少分析內容'); res.write('data: [DONE]\n\n'); return }
+    const { analysisText, actions: previewedActions } = req.body
 
-    step('🧠 解析優化計畫...')
-    const planRaw = await multiGenerate([
+    // If caller passes pre-parsed actions (from preview step), skip AI call
+    let plan
+    if (previewedActions?.length) {
+      plan = { actions: previewedActions }
+      step(`📋 套用已確認的 ${previewedActions.length} 項計畫...`)
+    } else {
+      if (!analysisText) { step('❌ 缺少分析內容'); res.write('data: [DONE]\n\n'); return }
+      step('🧠 解析優化計畫...')
+      const planRaw = await multiGenerate([
       {
         role: 'system',
         content: `你是 AI 自動化優化系統。只回傳 JSON，不要任何說明。格式：
@@ -1524,17 +1565,19 @@ app.post('/api/admin/agent-optimize', async (req, res) => {
         role: 'user',
         content: `根據以下分析，列出可立即套用的 model 更新。old_model 必須是程式碼中確切存在的字串：\n\n${analysisText}`
       }
-    ], 400)
+      ], 400)
 
-    let plan = { actions: [], skip_reason: '' }
-    try {
-      const m = planRaw.match(/\{[\s\S]*\}/)
-      if (m) plan = JSON.parse(m[0])
-    } catch {
-      step('⚠️ 無法解析優化計畫')
-      out(planRaw)
-      res.write('data: [DONE]\n\n')
-      return
+      let parsed = { actions: [], skip_reason: '' }
+      try {
+        const m = planRaw.match(/\{[\s\S]*\}/)
+        if (m) parsed = JSON.parse(m[0])
+      } catch {
+        step('⚠️ 無法解析優化計畫')
+        out(planRaw)
+        res.write('data: [DONE]\n\n')
+        return
+      }
+      plan = parsed
     }
 
     if (!plan.actions?.length) {
@@ -1543,7 +1586,7 @@ app.post('/api/admin/agent-optimize', async (req, res) => {
       return
     }
 
-    step(`📋 計畫套用 ${plan.actions.length} 項更新...`)
+    step(`📋 套用 ${plan.actions.length} 項更新...`)
     const applied = [], skipped = []
 
     for (const action of plan.actions) {

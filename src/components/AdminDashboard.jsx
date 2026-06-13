@@ -224,6 +224,8 @@ export default function AdminDashboard({ onBack }) {
   const [auditOutput, setAuditOutput]         = useState('')
   const [agentAnalysisRunning, setAgentAnalysisRunning] = useState(false)
   const [agentAnalysisOutput, setAgentAnalysisOutput]   = useState('')
+  const [optimizePreview, setOptimizePreview]           = useState(null)   // parsed actions array
+  const [optimizePreviewLoading, setOptimizePreviewLoading] = useState(false)
   const [optimizeRunning, setOptimizeRunning]           = useState(false)
   const [optimizeSteps, setOptimizeSteps]               = useState([])
   const [optimizeOutput, setOptimizeOutput]             = useState('')
@@ -315,6 +317,7 @@ export default function AdminDashboard({ onBack }) {
   const handleAgentAnalysis = useCallback(async () => {
     setAgentAnalysisRunning(true)
     setAgentAnalysisOutput('')
+    setOptimizePreview(null)
     setOptimizeSteps([])
     setOptimizeOutput('')
     await streamAgent(
@@ -327,13 +330,34 @@ export default function AdminDashboard({ onBack }) {
     )
   }, [])
 
-  const handleOptimize = useCallback(async (analysisText) => {
+  const handleOptimizePreview = useCallback(async (analysisText) => {
+    setOptimizePreviewLoading(true)
+    setOptimizePreview(null)
+    setOptimizeSteps([])
+    setOptimizeOutput('')
+    try {
+      const r = await fetch('/pm/api/admin/agent-optimize/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ analysisText })
+      })
+      const plan = await r.json()
+      setOptimizePreview(plan.actions?.length ? plan.actions : [])
+    } catch (e) {
+      setOptimizeSteps([`❌ 預覽失敗: ${e.message}`])
+    } finally {
+      setOptimizePreviewLoading(false)
+    }
+  }, [])
+
+  const handleOptimizeApply = useCallback(async (actions) => {
     setOptimizeRunning(true)
     setOptimizeSteps([])
     setOptimizeOutput('')
+    setOptimizePreview(null)
     await streamAgent(
       '/pm/api/admin/agent-optimize',
-      { analysisText },
+      { actions },
       (s) => setOptimizeSteps(prev => [...prev, s]),
       (chunk) => setOptimizeOutput(prev => prev + chunk),
       () => setOptimizeRunning(false),
@@ -580,16 +604,36 @@ export default function AdminDashboard({ onBack }) {
             {agentAnalysisOutput && (
               <div className="audit-panel" style={{ marginBottom: 8 }}>
                 <div className="audit-output">{agentAnalysisOutput}</div>
-                {!agentAnalysisRunning && (
+                {!agentAnalysisRunning && optimizePreview === null && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
                     <button
                       className="btn btn-sm btn-ai"
-                      onClick={() => handleOptimize(agentAnalysisOutput)}
-                      disabled={optimizeRunning}
+                      onClick={() => handleOptimizePreview(agentAnalysisOutput)}
+                      disabled={optimizePreviewLoading}
                     >
-                      {optimizeRunning ? '優化中…' : '⚡ 自動優化'}
+                      {optimizePreviewLoading ? '分析中…' : '⚡ 自動優化'}
                     </button>
-                    {optimizeRunning && <span className="admin-svc-meta" style={{ fontSize: 11 }}>正在套用更新並重啟服務…</span>}
+                  </div>
+                )}
+                {optimizePreview !== null && !optimizeRunning && (
+                  <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                    {optimizePreview.length === 0 ? (
+                      <div style={{ fontSize: 12, color: 'var(--muted)' }}>✅ 無需更新</div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>預覽變更（確認後才套用）：</div>
+                        {optimizePreview.map((a, i) => (
+                          <div key={i} className="audit-step" style={{ marginBottom: 3 }}>
+                            <strong>{a.service}</strong> · {a.provider}: <code style={{ fontSize: 10 }}>{a.old_model}</code> → <code style={{ fontSize: 10 }}>{a.new_model}</code>
+                            {a.reason && <span style={{ color: 'var(--muted)', marginLeft: 6 }}>({a.reason})</span>}
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <button className="btn btn-sm btn-ai" onClick={() => handleOptimizeApply(optimizePreview)}>✅ 確認套用</button>
+                          <button className="btn btn-sm" onClick={() => setOptimizePreview(null)}>✗ 取消</button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
                 {(optimizeSteps.length > 0 || optimizeOutput) && (
