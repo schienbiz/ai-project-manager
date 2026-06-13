@@ -234,9 +234,13 @@ export default function AdminDashboard({ onBack }) {
   const [vaultCollapsed, setVaultCollapsed] = useState({})
   const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
+  const loadVault = useCallback(async () => {
+    try { setVault(await api.getVault()) } catch {}
+  }, [])
+
   const refresh = useCallback(async () => {
     try {
-      const [d, v] = await Promise.all([api.getAdminStatus(), api.getVault()])
+      const d = await api.getAdminStatus()
       const next = {}
       ;[...d.services, ...(d.renderServices || [])].forEach(svc => {
         const key = svc.label || svc.host
@@ -245,7 +249,6 @@ export default function AdminDashboard({ onBack }) {
         prevLatency.current[key] = svc.latency
       })
       setData({ ...d, _trends: next })
-      setVault(v)
       setLastRefresh(new Date())
       setError(null)
     } catch (e) {
@@ -257,9 +260,10 @@ export default function AdminDashboard({ onBack }) {
 
   useEffect(() => {
     refresh()
+    loadVault()
     const id = setInterval(refresh, 10_000)
     return () => clearInterval(id)
-  }, [refresh])
+  }, [refresh, loadVault])
 
   useEffect(() => {
     const onKey = (e) => {
@@ -293,15 +297,13 @@ export default function AdminDashboard({ onBack }) {
     await api.upsertVaultKey(formData)
     setShowVaultForm(false)
     setEditingKey(null)
-    const v = await api.getVault()
-    setVault(v)
+    await loadVault()
   }
 
   const handleVaultDelete = async (name) => {
     if (!confirm(`刪除 ${name}?`)) return
     await api.deleteVaultKey(name)
-    const v = await api.getVault()
-    setVault(v)
+    await loadVault()
   }
 
   const handleSendDigest = async () => {
@@ -384,7 +386,7 @@ export default function AdminDashboard({ onBack }) {
     try {
       await api.forceRefreshRender()
       setTimeout(refresh, 3000)
-    } catch {}
+    } catch (e) { console.error('Force render refresh failed:', e) }
     setTimeout(() => setRefreshingRender(false), 3500)
   }
 
