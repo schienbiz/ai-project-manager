@@ -36,15 +36,15 @@ function parseWatchdogLine(line) {
   return { time: isNaN(parsed) ? null : parsed, message: m[2] }
 }
 
-function nextDigest(lastIso) {
-  if (!lastIso) return 'unknown'
-  const last = new Date(lastIso)
-  const next = new Date(last)
-  next.setUTCDate(next.getUTCDate() + 1)
-  const diffMs = next - Date.now()
-  if (diffMs < 0) return 'imminent'
-  const h = Math.floor(diffMs / 3_600_000)
-  const m = Math.floor((diffMs % 3_600_000) / 60_000)
+function nextDigest() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+  }).formatToParts(new Date())
+  const p = Object.fromEntries(parts.map(x => [x.type, +x.value]))
+  const elapsedSec = p.hour * 3600 + p.minute * 60 + p.second
+  const untilSec = (9 * 3600 - elapsedSec + 86400) % 86400 || 86400
+  const h = Math.floor(untilSec / 3600)
+  const m = Math.floor((untilSec % 3600) / 60)
   return `in ${h}h ${m}m`
 }
 
@@ -764,7 +764,7 @@ export default function AdminDashboard({ onBack }) {
                 right={
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span className="admin-svc-meta" style={{ fontSize: 11 }}>
-                      next {nextDigest(data.digest.lastDigestAt)} · 09:00 Taipei
+                      next {nextDigest()} · 09:00 Taipei
                     </span>
                     <button className="btn btn-sm btn-ai" onClick={handleSendDigest} disabled={sendingDigest} title="立即發送">
                       {sendingDigest ? '…' : '↑ Now'}

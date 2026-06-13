@@ -17,7 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { execSync } from 'child_process'
-import { fetch as undiciFetch, Agent } from 'undici'
+import { fetch as undiciFetch } from 'undici'
 import express from 'express'
 import OpenAI from 'openai'
 import fs from 'fs'
@@ -1480,6 +1480,21 @@ app.get('/api/admin/ssh-diag', (req, res) => {
 })
 
 // ── AI Agent Optimize ────────────────────────────────────────────────────────
+const OPTIMIZE_SYSTEM_PROMPT = `你是 AI 自動化優化系統。只回傳 JSON，不要任何說明。格式：
+{
+  "actions": [
+    {
+      "service": "服務名稱 (Voice Trainer / AI Learning Tool / Marketing Asst / AI PM)",
+      "provider": "Provider 名稱 (Groq/Cerebras/NVIDIA/Mistral/OpenRouter/Qwen3)",
+      "old_model": "目前使用的完整 model ID (必須完全符合程式碼中的字串)",
+      "new_model": "要更新到的完整 model ID",
+      "reason": "一句話說明原因"
+    }
+  ],
+  "skip_reason": "如果沒有需要更新的項目，填原因；否則填空字串"
+}
+服務名稱必須完全符合上述選項之一。只包含有明確改善效果且確定正確的更新。`
+
 const OPTIMIZABLE_SERVICES = [
   { name: 'Voice Trainer',    file: `${homedir()}/CloudSync/voice-trainer/server/index.js`,        label: 'com.voice-trainer',           selfRestart: false },
   { name: 'AI Learning Tool', file: `${homedir()}/CloudSync/ai-learning-tool/server.js`,           label: 'com.ai-learning-tool.dev',    selfRestart: false },
@@ -1494,23 +1509,7 @@ app.post('/api/admin/agent-optimize/preview', async (req, res) => {
     if (!analysisText) return res.status(400).json({ error: '缺少分析內容' })
 
     const planRaw = await multiGenerate([
-      {
-        role: 'system',
-        content: `你是 AI 自動化優化系統。只回傳 JSON，不要任何說明。格式：
-{
-  "actions": [
-    {
-      "service": "服務名稱 (Voice Trainer / AI Learning Tool / Marketing Asst / AI PM)",
-      "provider": "Provider 名稱 (Groq/Cerebras/NVIDIA/Mistral/OpenRouter/Qwen3)",
-      "old_model": "目前使用的完整 model ID (必須完全符合程式碼中的字串)",
-      "new_model": "要更新到的完整 model ID",
-      "reason": "一句話說明原因"
-    }
-  ],
-  "skip_reason": "如果沒有需要更新的項目，填原因；否則填空字串"
-}
-服務名稱必須完全符合上述選項之一。只包含有明確改善效果且確定正確的更新。`
-      },
+      { role: 'system', content: OPTIMIZE_SYSTEM_PROMPT },
       { role: 'user', content: `根據以下分析，列出可立即套用的 model 更新。old_model 必須是程式碼中確切存在的字串：\n\n${analysisText}` }
     ], 400)
 
@@ -1544,27 +1543,8 @@ app.post('/api/admin/agent-optimize', async (req, res) => {
       if (!analysisText) { step('❌ 缺少分析內容'); res.write('data: [DONE]\n\n'); return }
       step('🧠 解析優化計畫...')
       const planRaw = await multiGenerate([
-      {
-        role: 'system',
-        content: `你是 AI 自動化優化系統。只回傳 JSON，不要任何說明。格式：
-{
-  "actions": [
-    {
-      "service": "服務名稱 (Voice Trainer / AI Learning Tool / Marketing Asst / AI PM)",
-      "provider": "Provider 名稱 (Groq/Cerebras/NVIDIA/Mistral/OpenRouter/Qwen3)",
-      "old_model": "目前使用的完整 model ID (必須完全符合程式碼中的字串)",
-      "new_model": "要更新到的完整 model ID",
-      "reason": "一句話說明原因"
-    }
-  ],
-  "skip_reason": "如果沒有需要更新的項目，填原因；否則填空字串"
-}
-服務名稱必須完全符合上述選項之一。只包含有明確改善效果且確定正確的更新。`
-      },
-      {
-        role: 'user',
-        content: `根據以下分析，列出可立即套用的 model 更新。old_model 必須是程式碼中確切存在的字串：\n\n${analysisText}`
-      }
+        { role: 'system', content: OPTIMIZE_SYSTEM_PROMPT },
+        { role: 'user', content: `根據以下分析，列出可立即套用的 model 更新。old_model 必須是程式碼中確切存在的字串：\n\n${analysisText}` },
       ], 400)
 
       let parsed = { actions: [], skip_reason: '' }
