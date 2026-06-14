@@ -2,11 +2,14 @@
 # chusMBp service watchdog — runs every 5 min via LaunchAgent
 # Checks all 6 services, restarts dead ones, attempts auto-recovery from stderr,
 # sends Telegram alert distinguishing structural vs transient failures.
+# Also writes Syncthing-based heartbeat + checks ngrok/Tailscale tunnels.
 
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 BOT_TOKEN="$(cat ~/Library/LaunchAgents/com.ai-project-manager.dev.plist | grep -A1 'BOT_TOKEN' | tail -1 | sed 's/.*<string>//;s/<\/string>.*//')"
 CHAT_ID="$(cat ~/Library/LaunchAgents/com.ai-project-manager.dev.plist | grep -A1 'OWNER_TELEGRAM_ID' | tail -1 | sed 's/.*<string>//;s/<\/string>.*//')"
+
+HB_FILE="$HOME/CloudSync/ai-project-manager/data/heartbeat.json"
 
 send_telegram() {
   [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ] && return
@@ -17,6 +20,8 @@ send_telegram() {
 
 RESTARTED=()
 STRUCTURAL=()   # "label|error_snippet|recovery_result"
+# SVC_HTTP tracks last known HTTP code per port (for heartbeat reuse)
+SVC_HTTP_3000="000"; SVC_HTTP_3001="000"; SVC_HTTP_3003="000"; SVC_HTTP_3004="000"; SVC_HTTP_3005="000"
 
 # try_kickstart <label>
 try_kickstart() {
@@ -33,17 +38,24 @@ check_service() {
   local LABEL="$1"
   local URL="$2"
   local LOG="$3"
-  local MAIN_FILE="$4"   # server/index.js or server.js — for .bak restore
-  local SVC_DIR="$5"     # for npm install
+  local MAIN_FILE="$4"
+  local SVC_DIR="$5"
   local HTTP
 
   HTTP=$(curl -s --max-time 5 "$URL" -o /dev/null -w '%{http_code}')
+  # Record status for heartbeat reuse
+  case "$URL" in
+    *:3000*) SVC_HTTP_3000="$HTTP" ;;
+    *:3001*) SVC_HTTP_3001="$HTTP" ;;
+    *:3003*) SVC_HTTP_3003="$HTTP" ;;
+    *:3004*) SVC_HTTP_3004="$HTTP" ;;
+    *:3005*) SVC_HTTP_3005="$HTTP" ;;
+  esac
   if [ "$HTTP" != "000" ] && [ -n "$HTTP" ]; then
     echo "[watchdog] $(date): $LABEL OK ($HTTP)"
     return
   fi
 
-  # Classify failure from stderr log
   local ERR_TYPE="transient"
   local ERR_SNIPPET=""
   local RECOVERY="none"
@@ -66,7 +78,6 @@ check_service() {
 
   echo "[watchdog] $(date): $LABEL unreachable (HTTP $HTTP) — $ERR_TYPE — attempting recovery"
 
-  # Auto-recovery based on error type
   case "$ERR_TYPE" in
     syntax)
       local BAK="${MAIN_FILE}.bak"
@@ -144,12 +155,38 @@ check_service "com.voice-trainer"           "http://localhost:3005/health" \
   "$HOME/CloudSync/voice-trainer/server/index.js" \
   "$HOME/CloudSync/voice-trainer"
 
+# --- Tunnel health checks ---
+
+# ngrok: check local API; restart LaunchAgent if process is gone
+if ! pgrep -x ngrok > /dev/null 2>&1; then
+  echo "[watchdog] $(date): ngrok not running — restarting"
+  launchctl kickstart -k "gui/501/com.relationship-os.ngrok" 2>/dev/null || \
+  launchctl kickstart -k "gui/501/com.ngrok" 2>/dev/null || true
+fi
+
+# Tailscale: reconnect if offline
+TS_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+if [ -x "$TS_BIN" ]; then
+  TS_SELF=$("$TS_BIN" status 2>/dev/null | head -3 | grep -c 'active\|idle')
+  if [ "$TS_SELF" -lt 1 ]; then
+    echo "[watchdog] $(date): Tailscale offline — reconnecting"
+    "$TS_BIN" up 2>/dev/null || true
+  fi
+fi
+
+# --- Heartbeat to Syncthing-shared file (reuses statuses from check_service above) ---
+HB_TS=$(date +%s)
+printf '{"ts":%s,"host":"chusMBp","services":{"3000":"%s","3001":"%s","3003":"%s","3004":"%s","3005":"%s"}}\n' \
+  "$HB_TS" "$SVC_HTTP_3000" "$SVC_HTTP_3001" "$SVC_HTTP_3003" "$SVC_HTTP_3004" "$SVC_HTTP_3005" > "$HB_FILE"
+echo "[watchdog] $(date): heartbeat written (ts=$HB_TS)"
+
+# --- Build Telegram alert ---
+
 if [ ${#RESTARTED[@]} -eq 0 ]; then
   echo "[watchdog] $(date): all services healthy"
   exit 0
 fi
 
-# Build Telegram message
 MSG="⚙️ *Watchdog triggered*\n\n$(printf '• %s\n' "${RESTARTED[@]}")"
 
 if [ ${#STRUCTURAL[@]} -gt 0 ]; then

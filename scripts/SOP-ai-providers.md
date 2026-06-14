@@ -31,7 +31,7 @@ Cause: rapid burst (e.g. 8 background agents at once) tripped all circuit breake
 open https://cancel-aneurism-uneven.ngrok-free.dev/pm/admin
 
 # Or SSH and restart service (clears all in-memory cooldowns)
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
 ```
 
@@ -42,13 +42,13 @@ Cause: OpenRouter, or any free-tier provider that requires payment.
 
 ```bash
 # Learning Tool: verify circuit is tripped for 24h (not retrying every hour)
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "grep 'payment required' /tmp/ai-learning-tool.err | tail -3"
 ```
 
 Fix: Top up credits at the provider dashboard. After adding credits, restart the service to clear the circuit:
 ```bash
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "launchctl kickstart -k gui/501/com.ai-learning-tool.dev"
 ```
 
@@ -57,7 +57,7 @@ Symptom: All Groq calls fail with 401, not 429.
 
 ```bash
 # Renew key at console.groq.com, then update .env on chusMBp
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "sed -i '' 's/GROQ_API_KEY=.*/GROQ_API_KEY=gsk_NEW_KEY/' \
   ~/CloudSync/ai-project-manager/.env \
   ~/CloudSync/ai-learning-tool/.env \
@@ -67,7 +67,7 @@ ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
 # Restart all services
 for label in com.ai-project-manager.dev com.ai-learning-tool.dev \
              com.marketing-assistant.dev com.relationship-os.dev; do
-  ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+  ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
     "launchctl kickstart -k gui/501/$label"
 done
 ```
@@ -77,7 +77,7 @@ Symptom: `Error querying the database: ... quota exceeded` in stderr.
 
 ```bash
 # Relationship OS: verify current DB is Supabase (not Neon)
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "grep 'DATABASE_URL' ~/relationship-os/.env | sed 's/:.*@/:***@/'"
 # Should show: aws-1-us-east-2.pooler.supabase.com (not neon.tech)
 ```
@@ -132,7 +132,7 @@ For Relationship OS: add the provider to `llm.ts`'s fallback chain. Circuit brea
 
 ```bash
 # Live tail all logs
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "tail -f /tmp/ai-project-manager.log /tmp/ai-learning-tool.log /tmp/marketing-dev.log"
 
 # Check AI PM circuit breaker state via admin API
@@ -140,10 +140,10 @@ curl https://cancel-aneurism-uneven.ngrok-free.dev/pm/api/admin/status | \
   python3 -c "import sys,json; d=json.load(sys.stdin); [print(p['name'],p.get('cooling','?')) for p in d['providers']]"
 
 # Check learning tool for 402 / 429 events
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "grep '\[circuit\]' /tmp/ai-learning-tool.err | tail -10"
 
 # Check Relationship OS LLM cooldowns
-ssh chuchuchien0430@chus-macbook-pro-3.tailb03d65.ts.net \
+ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "grep '\[llm\].*rate-limit\|cooling' /Users/chuchuchien0430/relationship-os/logs/stderr.log | tail -10"
 ```

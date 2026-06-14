@@ -393,8 +393,8 @@ app.post('/api/projects', async (req, res) => {
       name: req.body.name || 'Untitled Project',
       description: req.body.description || '',
       goal: req.body.goal || '',
-      status: req.body.status || 'active',
-      priority: req.body.priority || 'medium',
+      status:   VALID_PROJECT_STATUS.has(req.body.status)     ? req.body.status   : 'active',
+      priority: VALID_PROJECT_PRIORITY.has(req.body.priority) ? req.body.priority : 'medium',
       startDate: req.body.startDate || null,
       dueDate: req.body.dueDate || null,
       tags: req.body.tags || [],
@@ -543,18 +543,26 @@ app.get('/api/tasks', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+const VALID_TASK_STATUS   = new Set(['todo', 'in_progress', 'done', 'cancelled'])
+const VALID_TASK_PRIORITY = new Set(['low', 'medium', 'high', 'urgent'])
+const VALID_PROJECT_STATUS   = new Set(['active', 'paused', 'completed', 'archived'])
+const VALID_PROJECT_PRIORITY = new Set(['low', 'medium', 'high', 'urgent'])
+
 app.post('/api/tasks', async (req, res) => {
   try {
+    if (!req.body.projectId) return res.status(400).json({ error: 'projectId required' })
     const { rows: countRows } = await db.query(
       'SELECT COUNT(*) as cnt FROM tasks WHERE project_id=$1', [req.body.projectId]
     )
     const sortOrder = parseInt(countRows[0].cnt, 10)
+    const rawStatus   = req.body.status   || 'todo'
+    const rawPriority = req.body.priority || 'medium'
     const item = {
       id: uid(), projectId: req.body.projectId,
       title: req.body.title || 'Untitled Task',
       description: req.body.description || '',
-      status: req.body.status || 'todo',
-      priority: req.body.priority || 'medium',
+      status:   VALID_TASK_STATUS.has(rawStatus)   ? rawStatus   : 'todo',
+      priority: VALID_TASK_PRIORITY.has(rawPriority) ? rawPriority : 'medium',
       estimatedHours: req.body.estimatedHours ?? null,
       actualHours: req.body.actualHours ?? null,
       dueDate: req.body.dueDate || null,
@@ -1243,6 +1251,11 @@ const ADMIN_SERVICES = [
 
 const ALLOWED_LABELS = new Set(ADMIN_SERVICES.map(s => s.label))
 
+// ── ATung Mac services (polled via Tailscale) ─────────────────────────────────
+const ATUNG_SERVICES = [
+  { name: 'Warehouse Scanner', label: 'warehouse-scanner', host: 'atungs-mp25', port: 3008, path: '/health' },
+]
+
 // ── Render services (external) ────────────────────────────────────────────────
 const RENDER_SERVICES = [
   { name: '2560戰法',              host: 'two560-app.onrender.com',              path: '/' },
@@ -1251,6 +1264,7 @@ const RENDER_SERVICES = [
   { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/' },
   { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/' },
   { name: 'Voice Trainer',        host: 'voice-trainer.onrender.com',           path: '/health' },
+  { name: 'Self-Journal',         host: 'self-journal.onrender.com',            path: '/health' },
 ]
 
 // In-memory cache — admin status returns this instantly instead of blocking on HTTP polls
@@ -1411,6 +1425,20 @@ app.get('/api/admin/status', async (req, res) => {
     }
   }))
 
+  // ATung Mac services: polled via Tailscale (5s timeout — cross-machine)
+  const atungServices = await Promise.all(ATUNG_SERVICES.map(async (svc) => {
+    const t0 = Date.now()
+    try {
+      const r = await Promise.race([
+        fetch(`http://${svc.host}:${svc.port}${svc.path}`),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
+      ])
+      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 400 }
+    } catch {
+      return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
+    }
+  }))
+
   let watchdogLines = ['no log']
   try {
     const allLines = fs.readFileSync('/tmp/watchdog.log', 'utf-8').trim().split('\n').filter(Boolean)
@@ -1440,6 +1468,7 @@ app.get('/api/admin/status', async (req, res) => {
   const ts = Date.now()
   res.json({
     services,
+    atungServices,
     // Render: serve cached results instantly — refreshRenderCache() runs every 60s in background
     renderServices: _renderCache.services,
     renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,

@@ -147,6 +147,8 @@ function HealthPill({ label, ok, total }) {
 function HealthStrip({ data }) {
   const localHealthy = data.services.filter(s => s.healthy).length
   const localTotal = data.services.length
+  const atungHealthy = (data.atungServices || []).filter(s => s.healthy).length
+  const atungTotal = (data.atungServices || []).length
   const renderHealthy = (data.renderServices || []).filter(s => s.healthy).length
   const renderTotal = (data.renderServices || []).length
   const providerHealthy = data.providers.filter(p => !p.coolingDown).length
@@ -159,11 +161,12 @@ function HealthStrip({ data }) {
   const renderAvg = healthyRenders.length
     ? Math.round(healthyRenders.reduce((a, s) => a + s.latency, 0) / healthyRenders.length)
     : null
-  const allNominal = localHealthy === localTotal && renderHealthy === renderTotal && providerHealthy === providerTotal
+  const allNominal = localHealthy === localTotal && atungHealthy === atungTotal && renderHealthy === renderTotal && providerHealthy === providerTotal
 
   return (
     <div className="admin-health-strip">
       <HealthPill label="Local" ok={localHealthy} total={localTotal} />
+      {atungTotal > 0 && <HealthPill label="ATung" ok={atungHealthy} total={atungTotal} />}
       {renderTotal > 0 && <HealthPill label="Render" ok={renderHealthy} total={renderTotal} />}
       {providerTotal > 0 && <HealthPill label="AI" ok={providerHealthy} total={providerTotal} />}
       {avgLatency != null && (
@@ -242,7 +245,7 @@ export default function AdminDashboard({ onBack }) {
     try {
       const d = await api.getAdminStatus()
       const next = {}
-      ;[...d.services, ...(d.renderServices || [])].forEach(svc => {
+      ;[...d.services, ...(d.atungServices || []), ...(d.renderServices || [])].forEach(svc => {
         const key = svc.label || svc.host
         const prev = prevLatency.current[key]
         if (prev != null && svc.latency != null) next[key] = svc.latency - prev
@@ -498,6 +501,35 @@ export default function AdminDashboard({ onBack }) {
               })()}
             </div>}
           </section>
+
+          {/* ATung Mac Services */}
+          {data.atungServices && data.atungServices.length > 0 && (
+            <section className="admin-section">
+              <SectionHeader
+                title="ATung Mac Services"
+                ok={data.atungServices.filter(s => s.healthy).length}
+                total={data.atungServices.length}
+                collapsed={collapsed.atung}
+                onToggle={() => toggleSection('atung')}
+              />
+              {!collapsed.atung && <div className="admin-service-grid-2col">
+                {data.atungServices.map(svc => (
+                  <div key={`${svc.host}:${svc.port}`} className={`admin-service-card ${svc.healthy ? 'healthy' : 'unhealthy'}`}>
+                    <div className="admin-svc-left">
+                      <span className={`admin-dot ${svc.healthy ? 'dot-ok' : 'dot-err'}`} />
+                      <div>
+                        <div className="admin-svc-name">{svc.name}</div>
+                        <div className="admin-svc-meta">
+                          :{svc.port} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms<LatencyTrend delta={data._trends?.[svc.label]} /></span>
+                        </div>
+                      </div>
+                    </div>
+                    <span className="admin-atung-badge">ATung</span>
+                  </div>
+                ))}
+              </div>}
+            </section>
+          )}
 
           {/* Render Services */}
           {data.renderServices && (

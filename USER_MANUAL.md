@@ -4,7 +4,7 @@
 
 **Version:** 2026-05-20 (rev 3)
 **URL:** https://cancel-aneurism-uneven.ngrok-free.dev/pm
-**Tailscale (local):** http://chus-macbook-pro-3.tailb03d65.ts.net:3004/
+**Tailscale (local):** http://chus-macbook-pro-4.tailb03d65.ts.net:3004/
 
 ---
 
