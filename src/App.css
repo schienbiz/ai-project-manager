@@ -314,8 +314,9 @@ body {
 /* ── Admin Dashboard ── */
 .admin-dashboard { display: flex; flex-direction: column; height: 100%; overflow-y: auto; }
 .admin-header { padding: 20px 24px 0; border-bottom: 1px solid var(--border); padding-bottom: 14px; }
-.admin-title-row { display: flex; align-items: center; gap: 12px; }
-.admin-title-row h2 { flex: 1; font-size: 18px; }
+.admin-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.admin-title-row h2 { flex: 1 1 auto; font-size: 18px; min-width: 100px; white-space: nowrap; }
+.admin-refresh-info { white-space: nowrap; }
 .admin-refresh-info { font-size: 12px; color: var(--muted); }
 .admin-loading { padding: 32px 24px; color: var(--muted); }
 .admin-error { padding: 12px 24px; color: var(--danger); font-size: 13px; }
@@ -538,3 +539,66 @@ body {
 .audit-steps { display: flex; flex-direction: column; gap: 3px; }
 .audit-step { font-family: monospace; font-size: 11px; color: var(--muted); }
 .audit-output { font-size: 12px; color: var(--text); white-space: pre-wrap; line-height: 1.6; border-top: 1px solid var(--border); padding-top: 10px; }
+
+/* ── Responsive: tablet ── */
+@media (max-width: 768px) {
+  .admin-header { padding: 14px 16px 0; padding-bottom: 12px; }
+  .admin-body { padding: 14px 16px; gap: 16px; }
+  .admin-title-row { flex-wrap: wrap; gap: 8px; }
+  .admin-title-row h2 { flex: 1 1 auto; font-size: 16px; min-width: 120px; }
+  .admin-refresh-info { display: none; }
+  .admin-shortcut-hint { display: none; }
+  .admin-provider-grid-3col { grid-template-columns: repeat(2, 1fr); }
+  .admin-bottom-row { flex-direction: column; }
+  .vault-toolbar { flex-wrap: wrap; }
+  .vault-filter-proj { width: 100%; }
+  .vault-form-row { flex-wrap: wrap; }
+  .vault-input-date { max-width: 100%; }
+  .vault-input-proj { width: 100%; }
+  .proj-overview-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+}
+
+/* ── Responsive: mobile ── */
+@media (max-width: 540px) {
+  /* Auto-collapse sidebar to icon-only (52px) — reuses existing .collapsed styles */
+  .sidebar { width: 52px !important; min-width: 52px !important; }
+  .sidebar .sidebar-logo-text { display: none; }
+  .sidebar .sidebar-label { display: none; }
+  .sidebar .sidebar-item .name { display: none; }
+  .sidebar .sidebar-item .badge { display: none; }
+  .sidebar-footer .btn-new-text { display: none; }
+  .sidebar .lang-switcher { display: none; }
+  .sidebar .sidebar-item { justify-content: center; padding: 8px 0; }
+  .sidebar-footer { justify-content: center; }
+  .sidebar .btn-new { flex: none !important; width: 36px !important; padding: 7px 0 !important; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .sidebar-collapse-btn { display: none; }
+  .admin-header { padding: 12px 12px 0; padding-bottom: 10px; }
+  .admin-body { padding: 12px; gap: 14px; }
+  .admin-service-grid-2col { grid-template-columns: 1fr; }
+  .admin-service-grid-2col > :last-child:nth-child(odd) { grid-column: span 1; }
+  .admin-provider-grid-3col { grid-template-columns: 1fr; }
+  .admin-health-strip { gap: 5px; margin-top: 8px; }
+  .admin-hp { font-size: 10px; padding: 2px 7px; }
+  .admin-hs-status { margin-left: 0; }
+  .admin-svc-name { font-size: 12px; }
+  .admin-svc-meta { font-size: 10px; }
+  .proj-overview-grid { grid-template-columns: 1fr; }
+
+  /* Vault table → card layout on mobile */
+  .vault-thead { display: none; }
+  .vault-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 12px;
+  }
+  .vault-cell-name { font-size: 12px; }
+  .vault-cell-desc { white-space: normal; }
+  .vault-cell-val { word-break: break-all; }
+  .vault-cell-expiry { font-size: 10px; }
+  .vault-cell-actions { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; margin-top: 4px; }
+  .vault-form-row { flex-direction: column; }
+  .vault-input-date, .vault-input-proj { max-width: 100%; width: 100%; }
+  .vault-search { font-size: 13px; padding: 8px 12px; }
+}
