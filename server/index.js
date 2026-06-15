@@ -74,6 +74,7 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL
     )`)
+  await db.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_guide TEXT NOT NULL DEFAULT ''`)
   await db.query(`
     CREATE TABLE IF NOT EXISTS tasks (
       id UUID PRIMARY KEY,
@@ -115,6 +116,7 @@ async function initDb() {
 function rowToProject(r) {
   return {
     id: r.id, name: r.name, description: r.description, goal: r.goal,
+    userGuide: r.user_guide ?? '',
     status: r.status, priority: r.priority,
     startDate: r.start_date, dueDate: r.due_date,
     tags: r.tags,
@@ -393,6 +395,7 @@ app.post('/api/projects', async (req, res) => {
       name: req.body.name || 'Untitled Project',
       description: req.body.description || '',
       goal: req.body.goal || '',
+      userGuide: req.body.userGuide || '',
       status:   VALID_PROJECT_STATUS.has(req.body.status)     ? req.body.status   : 'active',
       priority: VALID_PROJECT_PRIORITY.has(req.body.priority) ? req.body.priority : 'medium',
       startDate: req.body.startDate || null,
@@ -402,9 +405,9 @@ app.post('/api/projects', async (req, res) => {
       updatedAt: now(),
     }
     await db.query(
-      `INSERT INTO projects (id,name,description,goal,status,priority,start_date,due_date,tags,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [item.id, item.name, item.description, item.goal, item.status, item.priority,
+      `INSERT INTO projects (id,name,description,goal,user_guide,status,priority,start_date,due_date,tags,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [item.id, item.name, item.description, item.goal, item.userGuide, item.status, item.priority,
        item.startDate, item.dueDate, JSON.stringify(item.tags), item.createdAt, item.updatedAt]
     )
     res.json(item)
@@ -502,10 +505,10 @@ app.put('/api/projects/:id', async (req, res) => {
     const b = req.body
     const { rows } = await db.query(
       `UPDATE projects SET
-         name=$1, description=$2, goal=$3, status=$4, priority=$5,
-         start_date=$6, due_date=$7, tags=$8, updated_at=$9
-       WHERE id=$10 RETURNING *`,
-      [b.name, b.description ?? '', b.goal ?? '', b.status ?? 'active', b.priority ?? 'medium',
+         name=$1, description=$2, goal=$3, user_guide=$4, status=$5, priority=$6,
+         start_date=$7, due_date=$8, tags=$9, updated_at=$10
+       WHERE id=$11 RETURNING *`,
+      [b.name, b.description ?? '', b.goal ?? '', b.userGuide ?? '', b.status ?? 'active', b.priority ?? 'medium',
        b.startDate ?? null, b.dueDate ?? null,
        JSON.stringify(b.tags ?? []), now(), req.params.id]
     )

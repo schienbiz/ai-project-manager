@@ -63,6 +63,9 @@ export const T = {
     projectNamePlaceholder: 'e.g. Mobile App Redesign',
     goalPlaceholder:        'What does success look like?',
     descPlaceholder:        'Brief description of the project…',
+    userGuideLabel:         'User Guide',
+    userGuidePlaceholder:   'URL, key features, how to use, notes…',
+    adminProjectsTitle:     'Projects Overview',
 
     // Task form
     editTask:  'Edit Task',
@@ -262,6 +265,9 @@ export const T = {
     projectNamePlaceholder: 'مثال: تصميم التطبيق',
     goalPlaceholder:        'كيف يبدو النجاح؟',
     descPlaceholder:        'وصف موجز للمشروع…',
+    userGuideLabel:         'دليل المستخدم',
+    userGuidePlaceholder:   'الرابط، الميزات الرئيسية، طريقة الاستخدام…',
+    adminProjectsTitle:     'نظرة عامة على المشاريع',
 
     // Task form
     editTask:  'تعديل المهمة',
@@ -456,6 +462,9 @@ export const T = {
     projectNamePlaceholder: '例如：行動應用改版',
     goalPlaceholder:        '成功的標準是什麼？',
     descPlaceholder:        '簡短描述本專案…',
+    userGuideLabel:         '使用者說明',
+    userGuidePlaceholder:   'URL、主要功能、使用方式、注意事項…',
+    adminProjectsTitle:     '專案總覽',
 
     // Task form
     editTask:  '編輯任務',

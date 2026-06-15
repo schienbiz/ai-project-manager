@@ -393,6 +393,27 @@ body {
 .admin-section-half { flex: 1; }
 .admin-info-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
 
+/* ── Projects Overview (Admin) ── */
+.proj-overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.proj-overview-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.proj-overview-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.proj-overview-name { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+.proj-overview-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; }
+.proj-overview-desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.proj-overview-guide { font-size: 11px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 0; white-space: pre-wrap; word-break: break-word; line-height: 1.5; font-family: inherit; max-height: 120px; overflow-y: auto; }
+
+/* ── User Guide (ProjectDetail) ── */
+.user-guide-section { border-top: 1px solid var(--border); padding: 14px 24px 10px; }
+.user-guide-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.user-guide-title { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.user-guide-body { cursor: pointer; }
+.user-guide-pre { font-size: 13px; color: var(--text); background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0; white-space: pre-wrap; word-break: break-word; line-height: 1.6; font-family: inherit; min-height: 44px; }
+.user-guide-empty { font-size: 13px; color: var(--muted); font-style: italic; }
+.user-guide-edit { display: flex; flex-direction: column; gap: 8px; }
+.user-guide-textarea { background: var(--surface2); border: 1px solid var(--accent); border-radius: 8px; color: var(--text); font-size: 13px; padding: 10px 14px; resize: vertical; line-height: 1.6; font-family: inherit; width: 100%; box-sizing: border-box; }
+.user-guide-textarea:focus { outline: none; }
+.user-guide-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
 /* ── Sidebar collapse ── */
 .sidebar.collapsed { width: 52px; min-width: 52px; }
 .sidebar.collapsed .sidebar-logo-text { display: none; }

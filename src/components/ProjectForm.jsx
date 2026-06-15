@@ -8,6 +8,7 @@ export default function ProjectForm({ project, onSave, onClose }) {
     name:        project?.name        || '',
     description: project?.description || '',
     goal:        project?.goal        || '',
+    userGuide:   project?.userGuide   || '',
     status:      project?.status      || 'active',
     priority:    project?.priority    || 'medium',
     startDate:   project?.startDate   || '',
@@ -71,6 +72,10 @@ export default function ProjectForm({ project, onSave, onClose }) {
             <div className="form-group">
               <label>{t.descriptionLabel}</label>
               <textarea value={form.description} onChange={e => set('description', e.target.value)} placeholder={t.descPlaceholder} rows={3} />
+            </div>
+            <div className="form-group">
+              <label>{t.userGuideLabel}</label>
+              <textarea value={form.userGuide} onChange={e => set('userGuide', e.target.value)} placeholder={t.userGuidePlaceholder} rows={4} />
             </div>
             <div className="form-row">
               <div className="form-group">

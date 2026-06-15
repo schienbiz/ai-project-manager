@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import AIPanel from './AIPanel.jsx'
 import AgentPanel from './AgentPanel.jsx'
 import TaskForm from './TaskForm.jsx'
@@ -92,6 +92,21 @@ export default function ProjectDetail({
   const [showAI, setShowAI] = useState(false)
   const [agentTask, setAgentTask] = useState(null)
   const [taskForm, setTaskForm] = useState(null)
+  const [editingGuide, setEditingGuide] = useState(false)
+  const [guideDraft, setGuideDraft] = useState('')
+  const [guideSaving, setGuideSaving] = useState(false)
+
+  const startGuideEdit = useCallback(() => {
+    setGuideDraft(project.userGuide || '')
+    setEditingGuide(true)
+  }, [project.userGuide])
+
+  const saveGuide = useCallback(async () => {
+    setGuideSaving(true)
+    await onUpdateProject({ ...project, userGuide: guideDraft })
+    setGuideSaving(false)
+    setEditingGuide(false)
+  }, [project, guideDraft, onUpdateProject])
   const [draggingId, setDraggingId] = useState(null)
   const [dragOver, setDragOver] = useState(null)
   const [filter, setFilter] = useState({ priority: null, agent: null, search: '' })
@@ -148,6 +163,40 @@ export default function ProjectDetail({
         <div className="progress-bar" style={{ marginTop: 10, marginBottom: 0 }}>
           <div className="progress-fill" style={{ width: `${pct}%` }} />
         </div>
+      </div>
+
+      <div className="user-guide-section">
+        <div className="user-guide-header">
+          <span className="user-guide-title">{t.userGuideLabel}</span>
+          {!editingGuide && (
+            <button className="btn btn-sm" onClick={startGuideEdit}>{t.edit}</button>
+          )}
+        </div>
+        {editingGuide ? (
+          <div className="user-guide-edit">
+            <textarea
+              className="user-guide-textarea"
+              value={guideDraft}
+              onChange={e => setGuideDraft(e.target.value)}
+              placeholder={t.userGuidePlaceholder}
+              rows={5}
+              autoFocus
+            />
+            <div className="user-guide-actions">
+              <button className="btn btn-sm" onClick={() => setEditingGuide(false)} disabled={guideSaving}>{t.cancel}</button>
+              <button className="btn btn-primary btn-sm" onClick={saveGuide} disabled={guideSaving}>
+                {guideSaving ? t.saving : t.noteSave}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="user-guide-body" onClick={startGuideEdit}>
+            {project.userGuide
+              ? <pre className="user-guide-pre">{project.userGuide}</pre>
+              : <span className="user-guide-empty">{t.userGuidePlaceholder}</span>
+            }
+          </div>
+        )}
       </div>
 
       <KanbanFilters filter={filter} onChange={setFilter} tasks={tasks} />

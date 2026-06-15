@@ -3,12 +3,14 @@ import { api, streamAgent } from '../api.js'
 
 const PROJECT_ORDER = [
   'AI PM', '2560戰法', 'Marketing', 'AI Learning', 'Voice Trainer',
-  'ROS', 'Intelligence Journal', 'Travel Advisor', 'Private Network', 'Leave Bot', 'Other'
+  'ROS', 'Intelligence Journal', 'Travel Advisor', 'Private Network',
+  'Leave Bot', 'Warehouse Scanner', 'Self-Journal', 'Other'
 ]
 const PROJECT_ICONS = {
   'AI PM': '🏢', '2560戰法': '📈', 'Marketing': '📣', 'AI Learning': '🎓',
   'Voice Trainer': '🎙', 'ROS': '💬', 'Intelligence Journal': '📰',
-  'Travel Advisor': '✈️', 'Private Network': '🔒', 'Leave Bot': '📅', 'Other': '📦'
+  'Travel Advisor': '✈️', 'Private Network': '🔒', 'Leave Bot': '📅',
+  'Warehouse Scanner': '📦', 'Self-Journal': '📔', 'Other': '🗂'
 }
 function groupByProject(entries) {
   const map = {}
@@ -235,10 +237,15 @@ export default function AdminDashboard({ onBack }) {
   const [vaultSearch, setVaultSearch]     = useState('')
   const [vaultProject, setVaultProject]   = useState('All')
   const [vaultCollapsed, setVaultCollapsed] = useState({})
+  const [projects, setProjects]           = useState([])
   const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
   const loadVault = useCallback(async () => {
     try { setVault(await api.getVault()) } catch {}
+  }, [])
+
+  const loadProjects = useCallback(async () => {
+    try { setProjects(await api.getProjects()) } catch {}
   }, [])
 
   const refresh = useCallback(async () => {
@@ -264,9 +271,10 @@ export default function AdminDashboard({ onBack }) {
   useEffect(() => {
     refresh()
     loadVault()
+    loadProjects()
     const id = setInterval(refresh, 10_000)
     return () => clearInterval(id)
-  }, [refresh, loadVault])
+  }, [refresh, loadVault, loadProjects])
 
   useEffect(() => {
     const onKey = (e) => {
@@ -576,6 +584,42 @@ export default function AdminDashboard({ onBack }) {
                   </div>
                 ))}
               </div>}
+            </section>
+          )}
+
+          {/* Projects Overview */}
+          {projects.length > 0 && (
+            <section className="admin-section">
+              <SectionHeader
+                title="專案總覽"
+                total={projects.length}
+                collapsed={collapsed.projectsOverview}
+                onToggle={() => toggleSection('projectsOverview')}
+              />
+              {!collapsed.projectsOverview && (
+                <div className="proj-overview-grid">
+                  {projects.filter(p => p.status !== 'archived').map(p => {
+                    const renderSvc = data?.renderServices?.find(s => s.name === p.name)
+                    return (
+                      <div key={p.id} className="proj-overview-card">
+                        <div className="proj-overview-top">
+                          <span className="proj-overview-name">{PROJECT_ICONS[p.name] || '📁'} {p.name}</span>
+                          {renderSvc && (
+                            <span className={`proj-overview-badge ${renderSvc.healthy ? 'render-ok' : 'render-err'}`}>
+                              {renderSvc.healthy ? 'UP' : 'DOWN'}
+                            </span>
+                          )}
+                          <span className={`badge badge-${p.status}`} style={{ fontSize: 10 }}>{p.status}</span>
+                        </div>
+                        {p.description && <div className="proj-overview-desc">{p.description}</div>}
+                        {p.userGuide && (
+                          <pre className="proj-overview-guide">{p.userGuide}</pre>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </section>
           )}
 
