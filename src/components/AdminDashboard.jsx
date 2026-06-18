@@ -223,6 +223,7 @@ export default function AdminDashboard({ onBack }) {
   const [revealedKeys, setRevealedKeys]   = useState({})
   const [copyingKeys, setCopyingKeys]     = useState({})
   const [refreshingRender, setRefreshingRender] = useState(false)
+  const [refreshingExt, setRefreshingExt] = useState(false)
   const [usageCfgOpen, setUsageCfgOpen]   = useState(false)
   const [usageCfgDraft, setUsageCfgDraft] = useState({ capHours: '', thresholdsText: '' })
   const [savingUsageCfg, setSavingUsageCfg] = useState(false)
@@ -402,6 +403,15 @@ export default function AdminDashboard({ onBack }) {
       setTimeout(refresh, 3000)
     } catch (e) { console.error('Force render refresh failed:', e) }
     setTimeout(() => setRefreshingRender(false), 3500)
+  }
+
+  const handleForceExtRefresh = async () => {
+    setRefreshingExt(true)
+    try {
+      await Promise.all([api.forceRefreshDbUsage(), api.forceRefreshCloudinary()])
+      setTimeout(refresh, 3000)
+    } catch (e) { console.error('Force ext-usage refresh failed:', e) }
+    setTimeout(() => setRefreshingExt(false), 3500)
   }
 
   const toggleUsageCfg = () => {
@@ -681,6 +691,74 @@ export default function AdminDashboard({ onBack }) {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* External resource usage — DB storage + Cloudinary */}
+          {(data.dbUsage?.dbs?.length > 0 || data.cloudinaryUsage) && (
+            <section className="admin-section">
+              <SectionHeader
+                title="外部資源用量 (DB / 圖庫)"
+                ok={(data.dbUsage?.dbs || []).filter(d => d.level === 'green' || d.level == null).length}
+                total={(data.dbUsage?.dbs || []).length}
+                collapsed={collapsed.extUsage}
+                onToggle={() => toggleSection('extUsage')}
+                right={
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="admin-svc-meta" style={{ fontSize: 11 }}>門檻同 Render 設定 · 6h 輪詢</span>
+                    <button className="btn btn-sm" onClick={handleForceExtRefresh} disabled={refreshingExt} title="Force refresh now">
+                      {refreshingExt ? '…' : '↺ Now'}
+                    </button>
+                  </div>
+                }
+              />
+              {!collapsed.extUsage && (
+                <div className="render-usage-grid">
+                  {(data.dbUsage?.dbs || []).map(d => (
+                    <div key={d.name} className="render-usage-card">
+                      <div className="render-usage-top">
+                        <span className="render-usage-ws">{d.name} <span className="render-usage-chip">{d.kind}</span></span>
+                        {!d.configured ? <span className="render-usage-pct" style={{ color: 'var(--text-dim,#8b949e)' }}>未設定</span>
+                          : d.sizeUnavailable ? <span className="render-usage-pct" style={{ color: 'var(--text-dim,#8b949e)' }}>N/A</span>
+                          : d.bytes == null ? <span className="render-usage-pct usage-red">讀取失敗</span>
+                          : <span className={`render-usage-pct usage-${d.level}`}>{d.usedDisplay} / {d.capDisplay} · {d.pct}%</span>}
+                      </div>
+                      {d.configured && d.bytes != null && (
+                        <div className="render-usage-bar">
+                          <div className={`render-usage-fill usage-${d.level}`} style={{ width: `${Math.min(d.pct, 100)}%` }} />
+                        </div>
+                      )}
+                      {!d.configured && <div className="render-usage-svcs"><span className="render-usage-chip">DATABASE_URL 未入 Vault</span></div>}
+                      {d.sizeUnavailable && <div className="render-usage-svcs"><span className="render-usage-chip">CockroachDB · SQL 無法查 size</span></div>}
+                      {d.error && <div className="render-usage-svcs"><span className="render-usage-chip" title={d.error}>連線錯誤</span></div>}
+                    </div>
+                  ))}
+                  {data.cloudinaryUsage && (
+                    <div className="render-usage-card">
+                      <div className="render-usage-top">
+                        <span className="render-usage-ws">Cloudinary <span className="render-usage-chip">warehouse</span></span>
+                        {!data.cloudinaryUsage.configured ? <span className="render-usage-pct" style={{ color: 'var(--text-dim,#8b949e)' }}>未設定</span>
+                          : data.cloudinaryUsage.error ? <span className="render-usage-pct usage-red">讀取失敗</span>
+                          : data.cloudinaryUsage.pct == null ? <span className="render-usage-pct">—</span>
+                          : <span className={`render-usage-pct usage-${data.cloudinaryUsage.level}`}>credits {data.cloudinaryUsage.pct}%</span>}
+                      </div>
+                      {data.cloudinaryUsage.configured && data.cloudinaryUsage.pct != null && (
+                        <div className="render-usage-bar">
+                          <div className={`render-usage-fill usage-${data.cloudinaryUsage.level}`} style={{ width: `${Math.min(data.cloudinaryUsage.pct, 100)}%` }} />
+                        </div>
+                      )}
+                      {!data.cloudinaryUsage.configured
+                        ? <div className="render-usage-svcs"><span className="render-usage-chip">把 CLOUDINARY_URL 加入 Vault 即啟用</span></div>
+                        : data.cloudinaryUsage.pct != null && (
+                          <div className="render-usage-svcs">
+                            <span className="render-usage-chip">storage {data.cloudinaryUsage.storageDisplay}</span>
+                            <span className="render-usage-chip">bandwidth {data.cloudinaryUsage.bandwidthDisplay}</span>
+                          </div>
+                        )}
+                    </div>
+                  )}
                 </div>
               )}
             </section>

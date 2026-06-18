@@ -1558,6 +1558,173 @@ app.post('/api/admin/render/usage/config', (req, res) => {
   res.json({ ok: true, config: usageConfigPublic() })
 })
 
+// ── DB storage usage (Neon 0.5GB / CockroachDB free caps) ───────────────────────
+// Silent cliff: a full DB fails writes with no warning. self-journal stores photos
+// as base64 in Neon, so its DB grows fastest. Shares alert thresholds with the
+// Render budget (_renderUsageConfig.thresholds). source 'env' = AI-PM's own DB;
+// 'vault:KEY' = decrypt a DATABASE_URL from the key vault.
+const DB_MONITORS = [
+  { name: 'AI PM',           source: 'env' },
+  { name: '2560戰法',         source: 'vault:DATABASE_URL_2560' },
+  { name: 'Voice Trainer',   source: 'vault:VOICE_DATABASE_URL' },
+  { name: 'Relationship OS', source: 'vault:DATABASE_URL_ROS' },
+  { name: 'Private Network', source: 'vault:DATABASE_URL_PRIVATE_NETWORK' },
+  { name: 'Leave Bot',       source: 'vault:DATABASE_URL_LEAVE_BOT' },
+  // self-journal / warehouse-scanner: add their DATABASE_URL to the vault to monitor
+]
+// Provider classified from connection host (different free caps). CockroachDB has no
+// SQL size function → those rows show N/A and never alert; the cliff that matters is
+// Neon's 0.5GB (self-journal base64 photos).
+const DB_CAP_BYTES = { neon: 512 * 1024 * 1024, crdb: 10 * 1024 * 1024 * 1024, pg: 512 * 1024 * 1024 }
+function classifyDb(host) {
+  if (/cockroachlabs\.cloud|crdb|cockroach/i.test(host)) return 'crdb'
+  if (/neon\.tech|\.neon\./i.test(host)) return 'neon'
+  return 'pg'
+}
+
+function fmtBytes(n) {
+  if (n == null) return '—'
+  const mb = n / 1048576
+  return mb >= 1024 ? `${(mb / 1024).toFixed(2)}GB` : `${Math.round(mb)}MB`
+}
+
+function resolveDbUrl(source) {
+  if (source === 'env') return process.env.DATABASE_URL || null
+  if (source.startsWith('vault:')) {
+    const entry = loadVault().find(e => e.name === source.slice(6))
+    return entry ? decryptVaultValue(entry.encryptedValue) : null
+  }
+  return null
+}
+
+async function checkDbSize(connStr) {
+  const u = new URL(connStr)
+  u.searchParams.delete('sslmode')   // pg driver's sslmode would override our ssl object
+  const client = new pg.Client({
+    connectionString: u.toString(),
+    ssl: { rejectUnauthorized: false },   // read-only size query across mixed providers
+    connectionTimeoutMillis: 8000,
+    query_timeout: 8000,
+  })
+  try {
+    await client.connect()
+    const { rows } = await client.query('SELECT pg_database_size(current_database()) AS bytes')
+    return Number(rows[0].bytes)
+  } finally {
+    await client.end().catch(() => {})
+  }
+}
+
+let _dbUsageCache = { dbs: [], checkedAt: null }
+const _dbAlertState = {}   // { name: highestThresholdFraction fired } — gauge w/ hysteresis
+
+async function refreshDbUsage() {
+  const dbs = await Promise.all(DB_MONITORS.map(async (m) => {
+    const connStr = resolveDbUrl(m.source)
+    if (!connStr) return { name: m.name, kind: '?', configured: false, bytes: null, capDisplay: '—' }
+    const kind = classifyDb(new URL(connStr).host)
+    const capBytes = DB_CAP_BYTES[kind]
+    const base = { name: m.name, kind, capBytes, capDisplay: fmtBytes(capBytes), configured: true }
+    try {
+      const bytes = await Promise.race([
+        checkDbSize(connStr),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000)),
+      ])
+      const frac = bytes / capBytes
+      return { ...base, bytes, usedDisplay: fmtBytes(bytes), pct: Math.round(frac * 1000) / 10, level: usageLevel(frac) }
+    } catch (e) {
+      // CockroachDB has no pg_database_size → surface as N/A, not an error (never alerts)
+      if (/unknown function|pg_database_size|does not exist/i.test(e.message)) {
+        return { ...base, bytes: null, sizeUnavailable: true }
+      }
+      return { ...base, bytes: null, error: e.message }
+    }
+  }))
+
+  // gauge alerts: fire when crossing up into a higher band; reset when it drops
+  for (const d of dbs) {
+    if (d.bytes == null) continue
+    const frac = d.bytes / d.capBytes
+    const crossed = _renderUsageConfig.thresholds.filter(t => frac >= t)
+    const top = crossed.length ? Math.max(...crossed) : 0
+    if (top > (_dbAlertState[d.name] || 0)) {
+      sendTelegram(`⚠️ *DB 儲存用量警告*\n\n*${d.name}* (${d.kind}) 已用 *${d.usedDisplay} / ${d.capDisplay}* (${d.pct}%)\n跨過 ${Math.round(top * 100)}% 門檻。\n滿了會寫入失敗${d.kind === 'neon' ? '（Neon free 0.5GB）' : '（CRDB free）'}。`).catch(() => {})
+      console.warn(`[db-usage] ${d.name} crossed ${Math.round(top * 100)}% (${d.usedDisplay}/${d.capDisplay})`)
+    }
+    _dbAlertState[d.name] = top   // store current band so a drop-then-recross re-alerts
+  }
+
+  _dbUsageCache = { dbs, checkedAt: new Date().toISOString() }
+  console.log(`[db-usage] refreshed — ${dbs.filter(d => d.bytes != null).length}/${dbs.length} measured`)
+}
+
+// Storage moves slowly + each Neon connect wakes the compute (burns compute-hours),
+// so poll every 6h; manual refresh available. Warm 20s after boot.
+setInterval(() => refreshDbUsage().catch(e => console.error('[db-usage] refresh error:', e.message)), 6 * 3600_000)
+setTimeout(() => refreshDbUsage().catch(() => {}), 20_000)
+
+app.post('/api/admin/db-usage/refresh', (req, res) => {
+  refreshDbUsage().catch(e => console.error('[db-usage] force-refresh error:', e.message))
+  res.json({ ok: true })
+})
+
+// ── Cloudinary usage (warehouse-scanner — ~25 credits/mo) ───────────────────────
+// Activates when CLOUDINARY_URL (cloudinary://key:secret@cloud) is in the vault.
+function getCloudinaryCreds() {
+  const entry = loadVault().find(e => e.name === 'CLOUDINARY_URL')
+  if (!entry) return null
+  try {
+    const u = new URL(decryptVaultValue(entry.encryptedValue))
+    return { apiKey: u.username, apiSecret: u.password, cloudName: u.hostname }
+  } catch { return null }
+}
+
+let _cloudinaryUsage = { configured: false, checkedAt: null }
+let _cloudinaryAlerted = 0
+
+async function refreshCloudinaryUsage() {
+  const c = getCloudinaryCreds()
+  if (!c) { _cloudinaryUsage = { configured: false, checkedAt: new Date().toISOString() }; return }
+  try {
+    const auth = Buffer.from(`${c.apiKey}:${c.apiSecret}`).toString('base64')
+    const r = await Promise.race([
+      fetch(`https://api.cloudinary.com/v1_1/${c.cloudName}/usage`, { headers: { Authorization: `Basic ${auth}` } }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000)),
+    ])
+    const j = await r.json()
+    const used = j.credits?.usage ?? null
+    const limit = j.credits?.limit ?? null
+    const frac = (used != null && limit) ? used / limit
+      : (j.credits?.used_percent != null ? j.credits.used_percent / 100 : null)
+    _cloudinaryUsage = {
+      configured: true, cloudName: c.cloudName, used, limit,
+      pct: frac != null ? Math.round(frac * 1000) / 10 : null,
+      level: frac != null ? usageLevel(frac) : null,
+      storageDisplay: fmtBytes(j.storage?.usage), bandwidthDisplay: fmtBytes(j.bandwidth?.usage),
+      checkedAt: new Date().toISOString(),
+    }
+    if (frac != null) {
+      const crossed = _renderUsageConfig.thresholds.filter(t => frac >= t)
+      const top = crossed.length ? Math.max(...crossed) : 0
+      if (top > _cloudinaryAlerted) {
+        sendTelegram(`⚠️ *Cloudinary 用量警告*\n\nWarehouse Scanner 圖庫 credits 已用 *${_cloudinaryUsage.pct}%* (${used}/${limit})\n跨過 ${Math.round(top * 100)}% 門檻。\n用光 → 上傳/轉換 403，掃描流程中斷。`).catch(() => {})
+        console.warn(`[cloudinary] crossed ${Math.round(top * 100)}%`)
+      }
+      _cloudinaryAlerted = top
+    }
+  } catch (e) {
+    _cloudinaryUsage = { configured: true, error: e.message, checkedAt: new Date().toISOString() }
+  }
+}
+
+setInterval(() => refreshCloudinaryUsage().catch(e => console.error('[cloudinary] refresh error:', e.message)), 3600_000)
+setTimeout(() => refreshCloudinaryUsage().catch(() => {}), 23_000)
+
+app.post('/api/admin/cloudinary/refresh', (req, res) => {
+  refreshCloudinaryUsage().catch(e => console.error('[cloudinary] force-refresh error:', e.message))
+  res.json({ ok: true })
+})
+
 app.get('/api/admin/status', async (req, res) => {
   // Local services: fast localhost polls (≤4s timeout, run in parallel)
   const services = await Promise.all(ADMIN_SERVICES.map(async (svc) => {
@@ -1621,6 +1788,8 @@ app.get('/api/admin/status', async (req, res) => {
     renderServices: _renderCache.services,
     renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,
     renderUsage: { month: _renderUsage.month, capHours: _renderUsageConfig.capHours, config: usageConfigPublic(), workspaces: renderUsageSummary() },
+    dbUsage: { dbs: _dbUsageCache.dbs, checkedAt: _dbUsageCache.checkedAt },
+    cloudinaryUsage: _cloudinaryUsage,
     providers: PROVIDERS.map(p => {
       const coolUntil = _cooldown[p.name]
       const coolingDown = !!(coolUntil && ts < coolUntil)

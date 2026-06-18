@@ -36,6 +36,8 @@ export const api = {
   revealVaultKey:     (name) => fetch(`/pm/api/admin/vault/${encodeURIComponent(name)}/reveal`).then(json),
   forceRefreshRender: () => post('/pm/api/admin/render/refresh', {}),
   setRenderUsageConfig: (cfg) => post('/pm/api/admin/render/usage/config', cfg),
+  forceRefreshDbUsage: () => post('/pm/api/admin/db-usage/refresh', {}),
+  forceRefreshCloudinary: () => post('/pm/api/admin/cloudinary/refresh', {}),
   sendDigestNow:      () => post('/pm/api/admin/digest/send-now', {}),
 
   // AI helpers
