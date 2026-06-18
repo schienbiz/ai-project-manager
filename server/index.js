@@ -1260,16 +1260,106 @@ const ATUNG_SERVICES = [
 ]
 
 // ── Render services (external) ────────────────────────────────────────────────
+// workspace = Render free-tier account pool. The real ceiling is 750h/month PER
+// WORKSPACE (shared by all awake free services in that account), not per service.
+// See hosting-decision-master-2026-06-17.md §3.
 const RENDER_SERVICES = [
-  { name: '2560戰法',              host: 'two560-app.onrender.com',              path: '/' },
-  { name: 'Travel Advisor',       host: 'travel-advisor-wwrz.onrender.com',     path: '/' },
-  { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/' },
-  { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/' },
-  { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/' },
-  { name: 'Voice Trainer',        host: 'voice-trainer.onrender.com',           path: '/health' },
-  { name: 'Self-Journal',         host: 'self-journal.onrender.com',            path: '/health' },
-  { name: 'Warehouse Scanner',    host: 'warehouse-scanner-nchl.onrender.com',  path: '/health' },
+  { name: '2560戰法',              host: 'two560-app.onrender.com',              path: '/',       workspace: 'schienbiz'   },
+  { name: 'Travel Advisor',       host: 'travel-advisor-wwrz.onrender.com',     path: '/',       workspace: 'schienbiz'   },
+  { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/',       workspace: 'schienbiz'   },
+  { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/',       workspace: 'atungc2020'  },
+  { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/',       workspace: 'smritichain' },
+  { name: 'Voice Trainer',        host: 'voice-trainer.onrender.com',           path: '/health', workspace: 'smritichain' },
+  { name: 'Self-Journal',         host: 'self-journal.onrender.com',            path: '/health', workspace: 'atungc2020'  },
+  { name: 'Warehouse Scanner',    host: 'warehouse-scanner-nchl.onrender.com',  path: '/health', workspace: 'atungc2020'  },
 ]
+
+// ── Render workspace usage budget (750h/month shared pool, per workspace) ───────
+const RENDER_WORKSPACE_CAP_H = 750            // free-tier hours per workspace per month
+const RENDER_USAGE_THRESHOLDS = [0.70, 0.85, 0.95]   // alert on crossing each (once/month)
+const RENDER_USAGE_PATH = path.join(__dirname, '../data/render-usage.json')
+
+// Taipei-local YYYY-MM, so the month rolls over on the 1st alongside Render billing.
+function taipeiMonth(d = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit',
+  }).formatToParts(d).map(x => [x.type, x.value]))
+  return `${p.year}-${p.month}`
+}
+
+// { month, awakeSeconds: { [svcName]: n }, alerted: { [workspace]: [pct,…] } }
+let _renderUsage = (() => {
+  try {
+    const u = JSON.parse(fs.readFileSync(RENDER_USAGE_PATH, 'utf-8'))
+    if (u && u.month === taipeiMonth()) return u
+  } catch {}
+  return { month: taipeiMonth(), awakeSeconds: {}, alerted: {} }
+})()
+let _lastUsageTickAt = null
+
+function saveRenderUsage() {
+  try {
+    fs.mkdirSync(path.dirname(RENDER_USAGE_PATH), { recursive: true })
+    fs.writeFileSync(RENDER_USAGE_PATH, JSON.stringify(_renderUsage))
+  } catch (e) { console.error('[render-usage] save error:', e.message) }
+}
+
+// Build per-workspace usage summary from the accumulator (for API + alerts).
+function renderUsageSummary() {
+  const ws = {}
+  for (const svc of RENDER_SERVICES) {
+    const w = svc.workspace
+    if (!ws[w]) ws[w] = { name: w, capHours: RENDER_WORKSPACE_CAP_H, services: [], totalHours: 0 }
+    const hours = (_renderUsage.awakeSeconds[svc.name] || 0) / 3600
+    ws[w].services.push({ name: svc.name, hours: Math.round(hours * 10) / 10 })
+    ws[w].totalHours += hours
+  }
+  return Object.values(ws).map(w => {
+    const pct = w.totalHours / w.capHours
+    return {
+      ...w,
+      totalHours: Math.round(w.totalHours * 10) / 10,
+      pct: Math.round(pct * 1000) / 10,                       // 0–100(+), 1 decimal
+      level: pct >= 0.95 ? 'red' : pct >= 0.85 ? 'orange' : pct >= 0.70 ? 'yellow' : 'green',
+    }
+  })
+}
+
+// Accumulate observed awake-time (healthy poll = service is awake this interval) and
+// fire Telegram alerts when a workspace crosses a usage threshold. Best-effort estimate
+// derived from the 60s health poll — the only awake-signal AI-PM has without a Render API key.
+function tickRenderUsage(results) {
+  const now = Date.now()
+  // roll over at Taipei month boundary
+  const month = taipeiMonth()
+  if (_renderUsage.month !== month) {
+    _renderUsage = { month, awakeSeconds: {}, alerted: {} }
+    _lastUsageTickAt = null
+    console.log(`[render-usage] new month ${month} — counters reset`)
+  }
+  // elapsed since last tick, clamped so a missed/slow cycle can't inflate the count
+  const deltaSec = _lastUsageTickAt ? Math.min(Math.max((now - _lastUsageTickAt) / 1000, 0), 120) : 0
+  _lastUsageTickAt = now
+  if (deltaSec > 0) {
+    for (const svc of results) {
+      if (svc.healthy) _renderUsage.awakeSeconds[svc.name] = (_renderUsage.awakeSeconds[svc.name] || 0) + deltaSec
+    }
+  }
+
+  // threshold alerts (dedup: once per threshold per workspace per month)
+  for (const w of renderUsageSummary()) {
+    const fired = _renderUsage.alerted[w.name] || []
+    for (const th of RENDER_USAGE_THRESHOLDS) {
+      if (w.totalHours / w.capHours >= th && !fired.includes(th)) {
+        fired.push(th)
+        sendTelegram(`⚠️ *Render 用量警告*\n\nWorkspace *${w.name}* 本月已用 *${w.totalHours}h / ${w.capHours}h* (${w.pct}%)\n跨過 ${Math.round(th * 100)}% 門檻。\n用光 → 該帳號所有 free service 一起停到下月 1 號。\n👉 讓可睡的服務真正睡、或分散到其他帳號池。`).catch(() => {})
+        console.warn(`[render-usage] ${w.name} crossed ${Math.round(th * 100)}% (${w.totalHours}h/${w.capHours}h)`)
+      }
+    }
+    _renderUsage.alerted[w.name] = fired
+  }
+  saveRenderUsage()
+}
 
 // In-memory cache — admin status returns this instantly instead of blocking on HTTP polls
 let _renderCache = { services: [], checkedAt: null }
@@ -1302,6 +1392,8 @@ async function refreshRenderCache() {
       console.log(`[render] ${svc.name} recovered`)
     }
   }
+
+  tickRenderUsage(results)
 
   _renderCache = { services: results, checkedAt: new Date().toISOString() }
   console.log(`[render] cache refreshed — ${results.filter(s => s.healthy).length}/${results.length} healthy`)
@@ -1476,6 +1568,7 @@ app.get('/api/admin/status', async (req, res) => {
     // Render: serve cached results instantly — refreshRenderCache() runs every 60s in background
     renderServices: _renderCache.services,
     renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,
+    renderUsage: { month: _renderUsage.month, capHours: RENDER_WORKSPACE_CAP_H, workspaces: renderUsageSummary() },
     providers: PROVIDERS.map(p => {
       const coolUntil = _cooldown[p.name]
       const coolingDown = !!(coolUntil && ts < coolUntil)

@@ -587,6 +587,48 @@ export default function AdminDashboard({ onBack }) {
             </section>
           )}
 
+          {/* Render Workspace Usage (750h/月 per workspace) */}
+          {data.renderUsage?.workspaces?.length > 0 && (
+            <section className="admin-section">
+              <SectionHeader
+                title="Render 用量 (月配額)"
+                ok={data.renderUsage.workspaces.filter(w => w.level === 'green').length}
+                total={data.renderUsage.workspaces.length}
+                collapsed={collapsed.renderUsage}
+                onToggle={() => toggleSection('renderUsage')}
+                right={
+                  <span className="admin-svc-meta" style={{ fontSize: 11 }}>
+                    {data.renderUsage.month} · {data.renderUsage.capHours}h/帳號 · 估算自醒著時數
+                  </span>
+                }
+              />
+              {!collapsed.renderUsage && (
+                <div className="render-usage-grid">
+                  {data.renderUsage.workspaces.map(w => (
+                    <div key={w.name} className="render-usage-card">
+                      <div className="render-usage-top">
+                        <span className="render-usage-ws">{w.name}</span>
+                        <span className={`render-usage-pct usage-${w.level}`}>
+                          {w.totalHours}h / {w.capHours}h · {w.pct}%
+                        </span>
+                      </div>
+                      <div className="render-usage-bar">
+                        <div className={`render-usage-fill usage-${w.level}`} style={{ width: `${Math.min(w.pct, 100)}%` }} />
+                      </div>
+                      <div className="render-usage-svcs">
+                        {w.services.map(s => (
+                          <span key={s.name} className="render-usage-chip" title={`${s.name}: ${s.hours}h 醒著`}>
+                            {s.name} {s.hours}h
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Projects Overview */}
           {projects.length > 0 && (
             <section className="admin-section">
