@@ -485,6 +485,10 @@ body {
 .cache-stale { color: var(--danger) !important; }
 
 /* Render workspace usage (750h/月 per workspace) */
+.render-usage-config { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.render-usage-config label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim, #8b949e); }
+.render-usage-config label input { width: 160px; }
+.render-usage-config-actions { display: flex; gap: 6px; margin-inline-start: auto; }
 .render-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
 .render-usage-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .render-usage-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }

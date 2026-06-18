@@ -223,6 +223,9 @@ export default function AdminDashboard({ onBack }) {
   const [revealedKeys, setRevealedKeys]   = useState({})
   const [copyingKeys, setCopyingKeys]     = useState({})
   const [refreshingRender, setRefreshingRender] = useState(false)
+  const [usageCfgOpen, setUsageCfgOpen]   = useState(false)
+  const [usageCfgDraft, setUsageCfgDraft] = useState({ capHours: '', thresholdsText: '' })
+  const [savingUsageCfg, setSavingUsageCfg] = useState(false)
   const [sendingDigest, setSendingDigest] = useState(false)
   const [auditRunning, setAuditRunning]       = useState(false)
   const [auditSteps, setAuditSteps]           = useState([])
@@ -399,6 +402,28 @@ export default function AdminDashboard({ onBack }) {
       setTimeout(refresh, 3000)
     } catch (e) { console.error('Force render refresh failed:', e) }
     setTimeout(() => setRefreshingRender(false), 3500)
+  }
+
+  const toggleUsageCfg = () => {
+    const c = data?.renderUsage?.config
+    setUsageCfgDraft({
+      capHours: String(c?.capHours ?? 750),
+      thresholdsText: (c?.thresholdsPct ?? [70, 85, 95]).join(', '),
+    })
+    setUsageCfgOpen(o => !o)
+  }
+
+  const saveUsageCfg = async () => {
+    const thresholdsPct = usageCfgDraft.thresholdsText
+      .split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n) && n > 0 && n <= 100)
+    if (!thresholdsPct.length || !(Number(usageCfgDraft.capHours) > 0)) return
+    setSavingUsageCfg(true)
+    try {
+      await api.setRenderUsageConfig({ capHours: Number(usageCfgDraft.capHours), thresholdsPct })
+      await refresh()
+      setUsageCfgOpen(false)
+    } catch (e) { console.error('Save usage config failed:', e) }
+    finally { setSavingUsageCfg(false) }
   }
 
   const handleReveal = async (name) => {
@@ -597,11 +622,43 @@ export default function AdminDashboard({ onBack }) {
                 collapsed={collapsed.renderUsage}
                 onToggle={() => toggleSection('renderUsage')}
                 right={
-                  <span className="admin-svc-meta" style={{ fontSize: 11 }}>
-                    {data.renderUsage.month} · {data.renderUsage.capHours}h/帳號 · 估算自醒著時數
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="admin-svc-meta" style={{ fontSize: 11 }}>
+                      {data.renderUsage.month} · {data.renderUsage.capHours}h/帳號 · 估算自醒著時數
+                    </span>
+                    <button className="btn btn-sm" onClick={toggleUsageCfg} title="Tune cap + thresholds">
+                      ⚙ 設定
+                    </button>
+                  </div>
                 }
               />
+              {!collapsed.renderUsage && usageCfgOpen && (
+                <div className="render-usage-config">
+                  <label>
+                    每帳號月配額 (h)
+                    <input
+                      type="number" min="1" className="vault-search" style={{ marginBottom: 0 }}
+                      value={usageCfgDraft.capHours}
+                      onChange={e => setUsageCfgDraft(d => ({ ...d, capHours: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    告警門檻 (%，逗號分隔)
+                    <input
+                      type="text" className="vault-search" style={{ marginBottom: 0 }}
+                      placeholder="70, 85, 95"
+                      value={usageCfgDraft.thresholdsText}
+                      onChange={e => setUsageCfgDraft(d => ({ ...d, thresholdsText: e.target.value }))}
+                    />
+                  </label>
+                  <div className="render-usage-config-actions">
+                    <button className="btn btn-sm btn-primary" onClick={saveUsageCfg} disabled={savingUsageCfg}>
+                      {savingUsageCfg ? '儲存中…' : '儲存'}
+                    </button>
+                    <button className="btn btn-sm" onClick={() => setUsageCfgOpen(false)} disabled={savingUsageCfg}>取消</button>
+                  </div>
+                </div>
+              )}
               {!collapsed.renderUsage && (
                 <div className="render-usage-grid">
                   {data.renderUsage.workspaces.map(w => (

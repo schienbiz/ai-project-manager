@@ -35,6 +35,7 @@ export const api = {
   deleteVaultKey:  (name) => del(`/pm/api/admin/vault/${encodeURIComponent(name)}`),
   revealVaultKey:     (name) => fetch(`/pm/api/admin/vault/${encodeURIComponent(name)}/reveal`).then(json),
   forceRefreshRender: () => post('/pm/api/admin/render/refresh', {}),
+  setRenderUsageConfig: (cfg) => post('/pm/api/admin/render/usage/config', cfg),
   sendDigestNow:      () => post('/pm/api/admin/digest/send-now', {}),
 
   // AI helpers

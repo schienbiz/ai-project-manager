@@ -1275,9 +1275,34 @@ const RENDER_SERVICES = [
 ]
 
 // ── Render workspace usage budget (750h/month shared pool, per workspace) ───────
-const RENDER_WORKSPACE_CAP_H = 750            // free-tier hours per workspace per month
-const RENDER_USAGE_THRESHOLDS = [0.70, 0.85, 0.95]   // alert on crossing each (once/month)
+const RENDER_WORKSPACE_CAP_H_DEFAULT = 750            // free-tier hours per workspace per month
+const RENDER_USAGE_THRESHOLDS_DEFAULT = [0.70, 0.85, 0.95]   // alert on crossing each (once/month)
 const RENDER_USAGE_PATH = path.join(__dirname, '../data/render-usage.json')
+const RENDER_USAGE_CONFIG_PATH = path.join(__dirname, '../data/render-usage-config.json')
+
+// Tunable from the admin UI; persisted separately so resetting usage never wipes config.
+function normalizeUsageConfig(c) {
+  const cap = Number(c?.capHours)
+  const capHours = Number.isFinite(cap) && cap > 0 ? cap : RENDER_WORKSPACE_CAP_H_DEFAULT
+  let th = Array.isArray(c?.thresholds) ? c.thresholds.map(Number).filter(n => Number.isFinite(n) && n > 0 && n <= 1) : []
+  th = [...new Set(th)].sort((a, b) => a - b).slice(0, 5)
+  if (!th.length) th = [...RENDER_USAGE_THRESHOLDS_DEFAULT]
+  return { capHours, thresholds: th }
+}
+let _renderUsageConfig = (() => {
+  try { return normalizeUsageConfig(JSON.parse(fs.readFileSync(RENDER_USAGE_CONFIG_PATH, 'utf-8'))) } catch {}
+  return { capHours: RENDER_WORKSPACE_CAP_H_DEFAULT, thresholds: [...RENDER_USAGE_THRESHOLDS_DEFAULT] }
+})()
+function saveRenderUsageConfig() {
+  try {
+    fs.mkdirSync(path.dirname(RENDER_USAGE_CONFIG_PATH), { recursive: true })
+    fs.writeFileSync(RENDER_USAGE_CONFIG_PATH, JSON.stringify(_renderUsageConfig))
+  } catch (e) { console.error('[render-usage] config save error:', e.message) }
+}
+// Public shape for API/UI: thresholds as integer percentages.
+function usageConfigPublic() {
+  return { capHours: _renderUsageConfig.capHours, thresholdsPct: _renderUsageConfig.thresholds.map(t => Math.round(t * 100)) }
+}
 
 // Taipei-local YYYY-MM, so the month rolls over on the 1st alongside Render billing.
 function taipeiMonth(d = new Date()) {
@@ -1304,12 +1329,19 @@ function saveRenderUsage() {
   } catch (e) { console.error('[render-usage] save error:', e.message) }
 }
 
+// Severity by how many configured thresholds the usage fraction has crossed.
+function usageLevel(pctFraction) {
+  const crossed = _renderUsageConfig.thresholds.filter(t => pctFraction >= t).length
+  return ['green', 'yellow', 'orange', 'red'][Math.min(crossed, 3)]
+}
+
 // Build per-workspace usage summary from the accumulator (for API + alerts).
 function renderUsageSummary() {
+  const cap = _renderUsageConfig.capHours
   const ws = {}
   for (const svc of RENDER_SERVICES) {
     const w = svc.workspace
-    if (!ws[w]) ws[w] = { name: w, capHours: RENDER_WORKSPACE_CAP_H, services: [], totalHours: 0 }
+    if (!ws[w]) ws[w] = { name: w, capHours: cap, services: [], totalHours: 0 }
     const hours = (_renderUsage.awakeSeconds[svc.name] || 0) / 3600
     ws[w].services.push({ name: svc.name, hours: Math.round(hours * 10) / 10 })
     ws[w].totalHours += hours
@@ -1320,7 +1352,7 @@ function renderUsageSummary() {
       ...w,
       totalHours: Math.round(w.totalHours * 10) / 10,
       pct: Math.round(pct * 1000) / 10,                       // 0–100(+), 1 decimal
-      level: pct >= 0.95 ? 'red' : pct >= 0.85 ? 'orange' : pct >= 0.70 ? 'yellow' : 'green',
+      level: usageLevel(pct),
     }
   })
 }
@@ -1346,10 +1378,17 @@ function tickRenderUsage(results) {
     }
   }
 
-  // threshold alerts (dedup: once per threshold per workspace per month)
+  checkUsageThresholds()
+  saveRenderUsage()
+}
+
+// Fire Telegram alerts when a workspace crosses a configured threshold.
+// dedup: once per threshold per workspace per month. Idempotent — safe to call on
+// config changes (no time accumulation here) so a newly-lowered threshold alerts at once.
+function checkUsageThresholds() {
   for (const w of renderUsageSummary()) {
     const fired = _renderUsage.alerted[w.name] || []
-    for (const th of RENDER_USAGE_THRESHOLDS) {
+    for (const th of _renderUsageConfig.thresholds) {
       if (w.totalHours / w.capHours >= th && !fired.includes(th)) {
         fired.push(th)
         sendTelegram(`⚠️ *Render 用量警告*\n\nWorkspace *${w.name}* 本月已用 *${w.totalHours}h / ${w.capHours}h* (${w.pct}%)\n跨過 ${Math.round(th * 100)}% 門檻。\n用光 → 該帳號所有 free service 一起停到下月 1 號。\n👉 讓可睡的服務真正睡、或分散到其他帳號池。`).catch(() => {})
@@ -1358,7 +1397,6 @@ function tickRenderUsage(results) {
     }
     _renderUsage.alerted[w.name] = fired
   }
-  saveRenderUsage()
 }
 
 // In-memory cache — admin status returns this instantly instead of blocking on HTTP polls
@@ -1506,6 +1544,20 @@ app.post('/api/admin/render/refresh', (req, res) => {
   res.json({ ok: true })
 })
 
+// Tune usage cap + alert thresholds from the admin UI. thresholdsPct = integer percentages.
+app.post('/api/admin/render/usage/config', (req, res) => {
+  const next = { capHours: _renderUsageConfig.capHours, thresholds: _renderUsageConfig.thresholds }
+  if (req.body?.capHours != null) next.capHours = Number(req.body.capHours)
+  if (Array.isArray(req.body?.thresholdsPct)) next.thresholds = req.body.thresholdsPct.map(n => Number(n) / 100)
+  _renderUsageConfig = normalizeUsageConfig(next)
+  saveRenderUsageConfig()
+  // re-evaluate immediately so a newly-lowered threshold can alert without waiting 60s
+  checkUsageThresholds()
+  saveRenderUsage()
+  console.log(`[render-usage] config updated: cap=${_renderUsageConfig.capHours}h thresholds=${_renderUsageConfig.thresholds.join(',')}`)
+  res.json({ ok: true, config: usageConfigPublic() })
+})
+
 app.get('/api/admin/status', async (req, res) => {
   // Local services: fast localhost polls (≤4s timeout, run in parallel)
   const services = await Promise.all(ADMIN_SERVICES.map(async (svc) => {
@@ -1568,7 +1620,7 @@ app.get('/api/admin/status', async (req, res) => {
     // Render: serve cached results instantly — refreshRenderCache() runs every 60s in background
     renderServices: _renderCache.services,
     renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,
-    renderUsage: { month: _renderUsage.month, capHours: RENDER_WORKSPACE_CAP_H, workspaces: renderUsageSummary() },
+    renderUsage: { month: _renderUsage.month, capHours: _renderUsageConfig.capHours, config: usageConfigPublic(), workspaces: renderUsageSummary() },
     providers: PROVIDERS.map(p => {
       const coolUntil = _cooldown[p.name]
       const coolingDown = !!(coolUntil && ts < coolUntil)
