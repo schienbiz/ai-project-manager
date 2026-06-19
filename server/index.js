@@ -1268,7 +1268,7 @@ const RENDER_SERVICES = [
   { name: 'Travel Advisor',       host: 'travel-advisor-wwrz.onrender.com',     path: '/',       workspace: 'schienbiz'   },
   { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/',       workspace: 'schienbiz'   },
   { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/',       workspace: 'atungc2020'  },
-  { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/',       workspace: 'smritichain' },
+  { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/',       workspace: 'schienbiz'   },  // verified via Render API 2026-06-19 (was mis-tagged smritichain)
   { name: 'Voice Trainer',        host: 'voice-trainer.onrender.com',           path: '/health', workspace: 'smritichain' },
   { name: 'Self-Journal',         host: 'self-journal.onrender.com',            path: '/health', workspace: 'atungc2020'  },
   { name: 'Warehouse Scanner',    host: 'warehouse-scanner-nchl.onrender.com',  path: '/health', workspace: 'atungc2020'  },
@@ -1358,8 +1358,11 @@ function renderUsageSummary() {
 }
 
 // Accumulate observed awake-time (healthy poll = service is awake this interval) and
-// fire Telegram alerts when a workspace crosses a usage threshold. Best-effort estimate
-// derived from the 60s health poll — the only awake-signal AI-PM has without a Render API key.
+// fire Telegram alerts when a workspace crosses a usage threshold.
+// ⚠️ Now that health polls only run while the admin dashboard is open (not on a 24/7 timer),
+// this is a LOWER BOUND on real awake-hours, not an authoritative figure — traffic/cron that
+// wakes a service while nobody is watching the dashboard goes uncounted. Treat the usage gauge
+// as indicative only; authoritative pool usage requires the Render API (RENDER_API_KEY).
 function tickRenderUsage(results) {
   const now = Date.now()
   // roll over at Taipei month boundary
@@ -1437,8 +1440,85 @@ async function refreshRenderCache() {
   console.log(`[render] cache refreshed — ${results.filter(s => s.healthy).length}/${results.length} healthy`)
 }
 
-// Refresh every 60s; warm cache immediately on startup
-setInterval(() => refreshRenderCache().catch(e => console.error('[render] refresh error:', e.message)), 60_000)
+// Render health is refreshed ON DEMAND from the /api/admin/status handler (i.e. only
+// while someone has the admin dashboard open), NOT on a background timer. A fixed-interval
+// poll hits every free service every cycle, which resets Render's 15-min spindown clock and
+// keeps the whole fleet awake 24/7 — that silently exhausted the schienbiz 750h workspace
+// pool and suspended 2560 / travel / intelligence-journal (2026-06-19). Can-sleep apps
+// should be allowed to sleep; we only probe them when a human is actually watching.
+let _renderRefreshInFlight = false
+function maybeRefreshRenderCache() {
+  if (_renderRefreshInFlight) return
+  const ageMs = _renderCache.checkedAt ? Date.now() - new Date(_renderCache.checkedAt) : Infinity
+  if (ageMs < 60_000) return            // throttle: at most one upstream poll per 60s
+  _renderRefreshInFlight = true
+  refreshRenderCache()
+    .catch(e => console.error('[render] refresh error:', e.message))
+    .finally(() => { _renderRefreshInFlight = false })
+}
+
+// ── Render authoritative state (via Render API, per-workspace key) ──────────────
+// Unlike the HTTP probe above, this hits api.render.com (NOT the service URLs), so it
+// NEVER wakes a free service and is safe to run on a background timer. It is the only
+// source of *authoritative* suspension state + reason (`suspenders`), e.g. 'billing' =
+// the workspace's free 750h pool is exhausted. (Render's API exposes no consumed-hours
+// figure, so this state is what catches a pool blow-out — not an hours number.)
+const RENDER_API_KEYS = {
+  schienbiz:   process.env.RENDER_API_KEY_SCHIENBIZ,
+  smritichain: process.env.RENDER_API_KEY_SMRITICHAIN,
+  atungc2020:  process.env.RENDER_API_KEY_ATUNGC2020,
+}
+let _renderApiState = { byHost: {}, services: [], checkedAt: null, errors: [] }
+const _renderSuspendState = {}   // host → last seen 'suspended'|'not_suspended' (for transition alerts)
+
+async function refreshRenderState() {
+  const byHost = {}, all = [], errors = []
+  for (const [ws, key] of Object.entries(RENDER_API_KEYS)) {
+    if (!key) continue
+    try {
+      const r = await Promise.race([
+        fetch('https://api.render.com/v1/services?limit=100', { headers: { Authorization: `Bearer ${key}` } }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10_000)),
+      ])
+      if (!r.ok) { errors.push(`${ws}:${r.status}`); continue }
+      for (const it of await r.json()) {
+        const s = it.service || it
+        const host = (s.serviceDetails?.url || '').replace(/^https?:\/\//, '')
+        const rec = { name: s.name, host, workspace: ws, suspended: s.suspended, suspenders: s.suspenders || [] }
+        if (host) byHost[host] = rec
+        all.push(rec)
+      }
+    } catch (e) { errors.push(`${ws}:${e.message}`) }
+  }
+  // Alert only on transitions (first sighting sets a silent baseline — no boot-time spam for
+  // services already suspended).
+  for (const rec of all) {
+    const prev = _renderSuspendState[rec.host]
+    _renderSuspendState[rec.host] = rec.suspended
+    if (prev && prev !== 'suspended' && rec.suspended === 'suspended') {
+      const why = rec.suspenders.join(',') || 'unknown'
+      const poolNote = rec.suspenders.includes('billing')
+        ? `\n→ 免費額度耗盡：*${rec.workspace}* workspace 的 750h 池可能已用光（同池其他服務也會一起停，等 1 號 billing reset）`
+        : ''
+      sendTelegram(`🔴 *Render 服務已暫停*\n\n*${rec.name}* (${rec.workspace})\n原因：\`${why}\`${poolNote}`).catch(() => {})
+      console.warn(`[render-api] ${rec.name} SUSPENDED (${why})`)
+    } else if (prev === 'suspended' && rec.suspended === 'not_suspended') {
+      sendTelegram(`🟢 *Render 服務已恢復*\n\n*${rec.name}* (${rec.workspace}) 已解除暫停`).catch(() => {})
+      console.log(`[render-api] ${rec.name} resumed`)
+    }
+  }
+  _renderApiState = { byHost, services: all, checkedAt: new Date().toISOString(), errors }
+  const susp = all.filter(s => s.suspended === 'suspended').length
+  console.log(`[render-api] state refreshed — ${susp}/${all.length} suspended${errors.length ? ` (errors: ${errors.join(' ')})` : ''}`)
+}
+// Safe to poll on a timer (hits the API, not the services). Warm once on startup so the
+// dashboard + alert baseline are ready immediately; refresh every 5 min thereafter.
+if (Object.values(RENDER_API_KEYS).some(Boolean)) {
+  refreshRenderState().catch(e => console.error('[render-api] startup error:', e.message))
+  setInterval(() => refreshRenderState().catch(e => console.error('[render-api] error:', e.message)), 5 * 60_000)
+} else {
+  console.warn('[render-api] no RENDER_API_KEY_* set — authoritative suspension state disabled')
+}
 
 // ── API Key Vault ─────────────────────────────────────────────────────────────
 const VAULT_PATH = path.join(__dirname, '../data/vault.json')
@@ -1726,6 +1806,11 @@ app.post('/api/admin/cloudinary/refresh', (req, res) => {
 })
 
 app.get('/api/admin/status', async (req, res) => {
+  // Dashboard is open (this endpoint is only polled by AdminDashboard) → kick a lazy,
+  // non-blocking render-health refresh. Self-throttled to ≤1 upstream poll/60s and skipped
+  // entirely when nobody is watching, so it never becomes a 24/7 keepalive (see maybeRefreshRenderCache).
+  maybeRefreshRenderCache()
+
   // Local services: fast localhost polls (≤4s timeout, run in parallel)
   const services = await Promise.all(ADMIN_SERVICES.map(async (svc) => {
     const t0 = Date.now()
@@ -1784,9 +1869,16 @@ app.get('/api/admin/status', async (req, res) => {
   res.json({
     services,
     atungServices,
-    // Render: serve cached results instantly — refreshRenderCache() runs every 60s in background
-    renderServices: _renderCache.services,
+    // Render: serve cached probe results instantly — refresh is triggered lazily above (only
+    // while the dashboard is open), so renderCacheAge can be large/null when reopened after idle.
+    // Each service is augmented with authoritative suspension state from the Render API.
+    renderServices: _renderCache.services.map(s => {
+      const api = _renderApiState.byHost[s.host]
+      return api ? { ...s, suspended: api.suspended, suspenders: api.suspenders } : s
+    }),
     renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,
+    // Authoritative state for the whole fleet (includes services not in the probe list, e.g. line-expense-bot).
+    renderApi: { checkedAt: _renderApiState.checkedAt, services: _renderApiState.services, errors: _renderApiState.errors },
     renderUsage: { month: _renderUsage.month, capHours: _renderUsageConfig.capHours, config: usageConfigPublic(), workspaces: renderUsageSummary() },
     dbUsage: { dbs: _dbUsageCache.dbs, checkedAt: _dbUsageCache.checkedAt },
     cloudinaryUsage: _cloudinaryUsage,
@@ -2221,8 +2313,9 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`[ai-pm] started on port ${PORT}`)
     scheduleNextDigest()
-    // Warm Render cache on startup (non-blocking — don't delay HTTP readiness)
-    refreshRenderCache().catch(e => console.error('[render] startup warm error:', e.message))
+    // No startup render warm: that would wake all free services on every restart (watchdog
+    // restarts are frequent) even when nobody is watching. The cache populates lazily on the
+    // first /api/admin/status request once a dashboard is opened.
   })
 }
 

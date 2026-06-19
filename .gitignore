@@ -6,3 +6,5 @@ data/
 .gstack/
 server/.syncthing.index.js.tmp
 .syncthing.*.tmp
+
+.env*
