@@ -722,6 +722,7 @@ export default function AdminDashboard({ onBack }) {
                         <span className="render-usage-ws">{d.name} <span className="render-usage-chip">{d.kind}</span></span>
                         {!d.configured ? <span className="render-usage-pct" style={{ color: 'var(--text-dim,#8b949e)' }}>未設定</span>
                           : d.sizeUnavailable ? <span className="render-usage-pct" style={{ color: 'var(--text-dim,#8b949e)' }}>N/A</span>
+                          : d.computeQuotaExceeded ? <span className="render-usage-pct usage-red">compute 耗盡</span>
                           : d.bytes == null ? <span className="render-usage-pct usage-red">讀取失敗</span>
                           : <span className={`render-usage-pct usage-${d.level}`}>{d.usedDisplay} / {d.capDisplay} · {d.pct}%</span>}
                       </div>
@@ -732,7 +733,8 @@ export default function AdminDashboard({ onBack }) {
                       )}
                       {!d.configured && <div className="render-usage-svcs"><span className="render-usage-chip">DATABASE_URL 未入 Vault</span></div>}
                       {d.sizeUnavailable && <div className="render-usage-svcs"><span className="render-usage-chip">CockroachDB · SQL 無法查 size</span></div>}
-                      {d.error && <div className="render-usage-svcs"><span className="render-usage-chip" title={d.error}>連線錯誤</span></div>}
+                      {d.computeQuotaExceeded && <div className="render-usage-svcs"><span className="render-usage-chip" style={{ color: 'var(--red,#f85149)' }} title={d.error}>Neon compute 月配額耗盡 · app 連不上 DB（非儲存問題）</span></div>}
+                      {d.error && !d.computeQuotaExceeded && <div className="render-usage-svcs"><span className="render-usage-chip" title={d.error}>連線錯誤</span></div>}
                     </div>
                   ))}
                   {data.cloudinaryUsage && (
