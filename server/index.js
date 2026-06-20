@@ -1470,9 +1470,10 @@ const RENDER_API_KEYS = {
 }
 let _renderApiState = { byHost: {}, services: [], checkedAt: null, errors: [] }
 const _renderSuspendState = {}   // host → last seen 'suspended'|'not_suspended' (for transition alerts)
+const _renderDeployState = {}    // host → last deploy status (2026-06-20: catch failed deploy w/o keepalive)
 
 async function refreshRenderState() {
-  const byHost = {}, all = [], errors = []
+  const byHost = {}, all = [], errors = [], idKey = {}
   for (const [ws, key] of Object.entries(RENDER_API_KEYS)) {
     if (!key) continue
     try {
@@ -1484,7 +1485,8 @@ async function refreshRenderState() {
       for (const it of await r.json()) {
         const s = it.service || it
         const host = (s.serviceDetails?.url || '').replace(/^https?:\/\//, '')
-        const rec = { name: s.name, host, workspace: ws, suspended: s.suspended, suspenders: s.suspenders || [] }
+        const rec = { name: s.name, host, workspace: ws, id: s.id, suspended: s.suspended, suspenders: s.suspenders || [] }
+        if (s.id) idKey[s.id] = key
         if (host) byHost[host] = rec
         all.push(rec)
       }
@@ -1507,6 +1509,29 @@ async function refreshRenderState() {
       console.log(`[render-api] ${rec.name} resumed`)
     }
   }
+  // Deploy-status 檢查（補「後端 deploy 失敗跑不起來」盲點，非 keepalive：打 Render API 不喚醒服務）。
+  // 只查非 suspended（suspended 已另告警）。轉態進入失敗狀態才發 Telegram。2026-06-20。
+  const BAD_DEPLOY = /failed|canceled/i
+  await Promise.all(all.filter(r => r.id && r.suspended !== 'suspended').map(async (rec) => {
+    const key = idKey[rec.id]
+    if (!key) return
+    try {
+      const r = await Promise.race([
+        fetch(`https://api.render.com/v1/services/${rec.id}/deploys?limit=1`, { headers: { Authorization: `Bearer ${key}` } }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+      ])
+      if (!r.ok) return
+      const arr = await r.json()
+      const status = ((arr[0] && (arr[0].deploy || arr[0])) || {}).status || ''
+      rec.deployStatus = status
+      const prev = _renderDeployState[rec.host]
+      _renderDeployState[rec.host] = status
+      if (prev && prev !== status && BAD_DEPLOY.test(status) && !BAD_DEPLOY.test(prev)) {
+        sendTelegram(`🔴 *Render deploy 失敗*\n\n*${rec.name}* (${rec.workspace})\n最新 deploy：\`${status}\`\n→ 服務可能跑不起來（非 suspend；後端可睡不能 ping，health poll 看不到）。查 Render dashboard logs。`).catch(() => {})
+        console.warn(`[render-api] ${rec.name} deploy ${status}`)
+      }
+    } catch { /* deploy 查詢 best-effort */ }
+  }))
   _renderApiState = { byHost, services: all, checkedAt: new Date().toISOString(), errors }
   const susp = all.filter(s => s.suspended === 'suspended').length
   console.log(`[render-api] state refreshed — ${susp}/${all.length} suspended${errors.length ? ` (errors: ${errors.join(' ')})` : ''}`)
@@ -1650,7 +1675,8 @@ const DB_MONITORS = [
   { name: 'Relationship OS', source: 'vault:DATABASE_URL_ROS' },
   { name: 'Private Network', source: 'vault:DATABASE_URL_PRIVATE_NETWORK' },
   { name: 'Leave Bot',       source: 'vault:DATABASE_URL_LEAVE_BOT' },
-  // self-journal / warehouse-scanner: add their DATABASE_URL to the vault to monitor
+  { name: 'Self-Journal',    source: 'vault:DATABASE_URL_SELF_JOURNAL' },   // 2026-06-20 納管：base64 照片存 Neon = 最會撐爆儲存的，先前漏監控
+  { name: 'Warehouse',       source: 'vault:DATABASE_URL_WAREHOUSE' },      // 2026-06-20 納管
 ]
 // Provider classified from connection host (different free caps). CockroachDB has no
 // SQL size function → those rows show N/A and never alert; the cliff that matters is
@@ -1851,6 +1877,28 @@ setInterval(() => {
 }, 60_000)
 console.log('[heartbeat] watchdog interval armed (aipm:%s ros:%s)',
   process.env.HC_PING_URL_AIPM ? 'on' : 'off', process.env.HC_PING_URL_ROS ? 'on' : 'off')
+
+// ─── Watchdog self-monitor (2026-06-20) ───────────────────────────────────────
+// ~/watchdog.sh 重啟所有 chusMBp 服務，但它自己沒人看：它死了→服務掛掉不再自動重啟、無告警。
+// watchdog 每次跑(StartInterval 300s)寫 /tmp/watchdog-hb (epoch 秒)；AI-PM 查其新鮮度，
+// >12min(2+ 個週期沒更新)= watchdog 死了 → 告警。檔不存在=還沒跑過(開機寬限)，不告警。
+let _watchdogStaleAlerted = false
+setInterval(() => {
+  let hb
+  try { hb = parseInt(fs.readFileSync('/tmp/watchdog-hb', 'utf-8').trim(), 10) } catch { return }
+  if (!Number.isFinite(hb)) return
+  const ageSec = Date.now() / 1000 - hb
+  if (ageSec > 720) {
+    if (!_watchdogStaleAlerted) {
+      sendTelegram(`🔴 *Watchdog 沒在跑*\n\nchusMBp 的 ~/watchdog.sh 已 *${Math.round(ageSec / 60)} 分鐘*沒心跳 → 服務掛掉不會自動重啟。檢查 \`com.chusmbp.watchdog\` LaunchAgent。`).catch(() => {})
+      console.warn(`[watchdog-monitor] STALE ${Math.round(ageSec)}s`)
+      _watchdogStaleAlerted = true
+    }
+  } else if (_watchdogStaleAlerted) {
+    sendTelegram(`🟢 *Watchdog 恢復*\n\n~/watchdog.sh 心跳恢復正常。`).catch(() => {})
+    _watchdogStaleAlerted = false
+  }
+}, 5 * 60_000)
 
 app.post('/api/admin/cloudinary/refresh', (req, res) => {
   refreshCloudinaryUsage().catch(e => console.error('[cloudinary] force-refresh error:', e.message))
