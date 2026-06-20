@@ -1697,6 +1697,7 @@ async function checkDbSize(connStr) {
 
 let _dbUsageCache = { dbs: [], checkedAt: null }
 const _dbAlertState = {}   // { name: highestThresholdFraction fired } — gauge w/ hysteresis
+const _dbComputeAlertState = {}   // { name: bool } — Neon compute-quota-exhausted alert dedup (2026-06-20 ROS 事故後新增)
 
 async function refreshDbUsage() {
   const dbs = await Promise.all(DB_MONITORS.map(async (m) => {
@@ -1717,6 +1718,11 @@ async function refreshDbUsage() {
       if (/unknown function|pg_database_size|does not exist/i.test(e.message)) {
         return { ...base, bytes: null, sizeUnavailable: true }
       }
+      // Neon free COMPUTE 配額耗盡 (XX000) — 真正會釀停機的指標（儲存量仍小=綠，但 app 連不上 DB）。
+      // 2026-06-20 ROS 事故根因：監控只盯儲存(pg_database_size)，看不到 compute 耗盡 → 靜默。現在偵測並告警。
+      if (/compute time quota|exceeded the compute|quota.*exceed/i.test(e.message)) {
+        return { ...base, bytes: null, computeQuotaExceeded: true, error: e.message }
+      }
       return { ...base, bytes: null, error: e.message }
     }
   }))
@@ -1732,6 +1738,26 @@ async function refreshDbUsage() {
       console.warn(`[db-usage] ${d.name} crossed ${Math.round(top * 100)}% (${d.usedDisplay}/${d.capDisplay})`)
     }
     _dbAlertState[d.name] = top   // store current band so a drop-then-recross re-alerts
+  }
+
+  // Neon compute-quota 告警（補儲存盲點）：compute 耗盡時儲存 gauge 仍綠、app 卻連不上 DB。
+  // 在 exhausted 轉態時發 Telegram，確認可連線(bytes!=null)時發恢復；transient error 不動狀態。
+  for (const d of dbs) {
+    if (!d.configured) continue
+    if (d.computeQuotaExceeded) {
+      if (!_dbComputeAlertState[d.name]) {
+        sendTelegram(`🔴 *Neon compute 配額耗盡*\n\n*${d.name}* 的 Neon 免費 compute 月配額已用完 → app 無法連 DB（注意：儲存量正常不代表沒事，這是另一個配額）。\n常見原因：24/7 keepalive/輪詢把 compute 釘醒。\n→ 等月配額重置、降輪詢頻率、或搬 CockroachDB / 付費。`).catch(() => {})
+        console.warn(`[db-usage] ${d.name} Neon COMPUTE quota EXHAUSTED`)
+      }
+      _dbComputeAlertState[d.name] = true
+    } else if (d.bytes != null) {   // 查得到 size = compute 可連 = 恢復
+      if (_dbComputeAlertState[d.name]) {
+        sendTelegram(`🟢 *Neon compute 恢復*\n\n*${d.name}* 的 Neon compute 已可連線（配額重置或恢復）。`).catch(() => {})
+        console.log(`[db-usage] ${d.name} Neon compute recovered`)
+      }
+      _dbComputeAlertState[d.name] = false
+    }
+    // else: bytes null 但非 compute 耗盡（timeout 等 transient）→ 不動狀態，避免假恢復/假告警
   }
 
   _dbUsageCache = { dbs, checkedAt: new Date().toISOString() }
