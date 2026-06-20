@@ -1988,7 +1988,9 @@ app.get('/api/admin/status', async (req, res) => {
       const stats = _providerStats[p.name] ?? { ok: 0, err: 0, lastUsed: null }
       return { name: p.name, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null, stats }
     }),
-    watchdog: { lastLine: watchdogLines[0], lines: watchdogLines },
+    watchdog: { lastLine: watchdogLines[0], lines: watchdogLines, hbAgeSec: (() => {
+      try { const hb = parseInt(fs.readFileSync('/tmp/watchdog-hb', 'utf-8').trim(), 10); return Number.isFinite(hb) ? Math.round(Date.now() / 1000 - hb) : null } catch { return null }
+    })() },
     syncthing,
     digest: { lastDigestAt: _lastDigestAt },
     storage: 'cockroachdb',

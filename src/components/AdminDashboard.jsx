@@ -585,6 +585,13 @@ export default function AdminDashboard({ onBack }) {
                 onToggle={() => toggleSection('render')}
                 right={
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {(() => {
+                      // #3 deploy 狀態摘要（來自 renderApi 權威狀態，非 probe）：只在有失敗時紅顯示
+                      const failed = (data.renderApi?.services || []).filter(s => /failed|canceled/i.test(s.deployStatus || ''))
+                      return failed.length > 0
+                        ? <span className="render-status-badge render-err" title={failed.map(s => `${s.name}: ${s.deployStatus}`).join(', ')}>⚠ {failed.length} deploy 失敗</span>
+                        : null
+                    })()}
                     {data.renderCacheAge != null && (
                       <span className={`admin-svc-meta ${renderCacheAgeClass(data.renderCacheAge)}`} style={{ fontSize: 11 }}>
                         cached {data.renderCacheAge < 60 ? `${data.renderCacheAge}s` : `${Math.floor(data.renderCacheAge / 60)}m`} ago · auto-refresh 60s
@@ -995,7 +1002,15 @@ export default function AdminDashboard({ onBack }) {
           {/* Watchdog + Digest */}
           <div className="admin-bottom-row">
             <section className="admin-section admin-section-half">
-              <SectionHeader title="Watchdog (chusMBp)" />
+              <SectionHeader title="Watchdog (chusMBp)" right={(() => {
+                // #4 watchdog 自監控：~/watchdog.sh 每跑寫 /tmp/watchdog-hb，>12min 沒更新=可能死了
+                const a = data.watchdog?.hbAgeSec
+                if (a == null) return <span className="admin-svc-meta" style={{ fontSize: 11, color: 'var(--text-dim,#8b949e)' }}>心跳 —</span>
+                const stale = a > 720
+                return <span className="render-status-badge" style={{ color: stale ? 'var(--red,#f85149)' : 'var(--green,#3fb950)' }} title="watchdog.sh 自監控心跳新鮮度">
+                  {stale ? '🔴 ' : ''}心跳 {a < 60 ? `${a}s` : `${Math.floor(a / 60)}m`} 前
+                </span>
+              })()} />
               <div className="admin-info-card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {(data.watchdog.lines || [data.watchdog.lastLine]).map((line, i) => {
                   const { time, message } = parseWatchdogLine(line)
