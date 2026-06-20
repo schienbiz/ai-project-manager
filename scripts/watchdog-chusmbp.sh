@@ -142,10 +142,17 @@ check_service "com.marketing-assistant.dev" "http://localhost:3001/" \
   "$HOME/CloudSync/marketing-assistant/server.js" \
   "$HOME/CloudSync/marketing-assistant"
 
-check_service "com.relationship-os.dev"     "http://localhost:3000/health" \
-  "/tmp/relationship-os.err" \
-  "$HOME/relationship-os/src/index.ts" \
-  "$HOME/relationship-os"
+# 2026-06-20 停用 ROS 的 HTTP /health 看門：ROS 是 selfbot，HTTP server 只在 DB 連上後才 bind 3000。
+# 當 ROS 的 Neon DB compute 配額耗盡時，connectDb (while-true) 永遠卡住 → 3000 永不 bind → 此檢查
+# 永遠 000 → kickstart -k 每 5 分鐘殺一個其實活著的進程 → 339 次重啟惡性循環 + Telegram 洗版，且重啟
+# 無法修復「外部 Neon 耗盡」這個根因。plist KeepAlive=true 已負責真 crash 的重啟；ROS connectDb
+# 會在 Neon 月配額重置後自動連上並 serve（自動復原）。故移除此 HTTP-kill 檢查。
+# 復原條件：若日後 ROS 確定健康時穩定 serve /health，可恢復下面檢查。錯誤 log 路徑亦錯(應為
+# ~/relationship-os/logs/stderr.log，非 /tmp/relationship-os.err)。詳見 [[project_relationship_os]]。
+# check_service "com.relationship-os.dev"     "http://localhost:3000/health" \
+#   "$HOME/relationship-os/logs/stderr.log" \
+#   "$HOME/relationship-os/src/index.ts" \
+#   "$HOME/relationship-os"
 
 check_service "com.proxy.marketing"         "http://localhost:3002/" \
   "/tmp/proxy.marketing.err" "" ""

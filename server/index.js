@@ -1264,7 +1264,7 @@ const ATUNG_SERVICES = [
 // WORKSPACE (shared by all awake free services in that account), not per service.
 // See hosting-decision-master-2026-06-17.md §3.
 const RENDER_SERVICES = [
-  { name: '2560戰法',              host: 'two560-app.onrender.com',              path: '/',       workspace: 'schienbiz'   },
+  { name: '2560戰法 (Worker)',     host: 'two560-app.atungc2020.workers.dev',    path: '/__up',   workspace: 'atungc2020', cf: true },  // CF Worker edge-only 健康檢查(不喚醒後端 two560-app-2)；後端停權狀態由 atungc2020 Render API key 覆蓋。2026-06-19 從 schienbiz two560-app.onrender.com 遷移(舊的已停權，且 HTTP poll 它=keepalive)
   { name: 'Travel Advisor',       host: 'travel-advisor-wwrz.onrender.com',     path: '/',       workspace: 'schienbiz'   },
   { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/',       workspace: 'schienbiz'   },
   { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/',       workspace: 'atungc2020'  },
@@ -1377,7 +1377,7 @@ function tickRenderUsage(results) {
   _lastUsageTickAt = now
   if (deltaSec > 0) {
     for (const svc of results) {
-      if (svc.healthy) _renderUsage.awakeSeconds[svc.name] = (_renderUsage.awakeSeconds[svc.name] || 0) + deltaSec
+      if (svc.healthy && !svc.cf) _renderUsage.awakeSeconds[svc.name] = (_renderUsage.awakeSeconds[svc.name] || 0) + deltaSec  // cf=CF Worker edge check，不消耗 Render 池時數，排除避免污染用量估算
     }
   }
 
@@ -1799,6 +1799,32 @@ async function refreshCloudinaryUsage() {
 
 setInterval(() => refreshCloudinaryUsage().catch(e => console.error('[cloudinary] refresh error:', e.message)), 3600_000)
 setTimeout(() => refreshCloudinaryUsage().catch(() => {}), 23_000)
+
+// ─── External watchdog heartbeat (Healthchecks.io dead-man's switch) ──────────
+// Push 模型：chusMBp 每 60s 往外送心跳。整台睡死/斷網/AI-PM crash → 心跳停 →
+// Healthchecks.io 寄 Email 告警。AI-PM 不對外開端點(留 Tailscale 私網，零曝露)，
+// 補「監控中心自己掛了沒人知」破口。URL 缺省則完全 inert(守門)。見 hosting docs。
+// Check-1 aipm：此 interval 會 fire = AI-PM 進程 + 事件迴圈活著。獨立計時，不耦合
+//   render-api 迴圈(否則 Render API 掛時會假告警)。
+// Check-2 ros：ROS 是 selfbot 無 HTTP /health → 改查 launchd 進程 PID 存活。
+function pingHeartbeat(url) {
+  if (!url) return
+  fetch(url, { method: 'GET' }).catch(() => {})   // fire-and-forget；HC 只看收到與否
+}
+setInterval(() => pingHeartbeat(process.env.HC_PING_URL_AIPM), 60_000)
+setInterval(() => {
+  const url = process.env.HC_PING_URL_ROS
+  if (!url) return
+  // ROS 健康判斷用「3000 是否 listen」(TCP 探測)：ROS 的 HTTP server 只在 DB 連上後才 bind 3000，
+  // 故 port-listening = 過了 DB init = 真服務中。
+  // ⚠️ 刻意【不】用 launchd PID(DB 掛時進程仍在=假綠，2026-06-20 Neon 耗盡事故踩過)，
+  // 也【不】用 HTTP /health(它內部 SELECT 1 會把 Neon compute 釘醒 → 變成新的 60s keepalive，
+  // 正是燒爆 ROS Neon 免費 compute 配額的元兇)。TCP connect 不觸發 /health 故不碰 Neon。
+  try { execSync('nc -z -w 2 localhost 3000', { timeout: 4000 }); pingHeartbeat(url) }
+  catch { /* 3000 沒 listen → ROS 未服務 → 不 ping → HC grace 過後 Email 告警 */ }
+}, 60_000)
+console.log('[heartbeat] watchdog interval armed (aipm:%s ros:%s)',
+  process.env.HC_PING_URL_AIPM ? 'on' : 'off', process.env.HC_PING_URL_ROS ? 'on' : 'off')
 
 app.post('/api/admin/cloudinary/refresh', (req, res) => {
   refreshCloudinaryUsage().catch(e => console.error('[cloudinary] force-refresh error:', e.message))
