@@ -56,12 +56,13 @@ export default function TaskForm({ task, defaultStatus, projectId, projectName, 
     e.preventDefault()
     if (!form.title.trim()) return
     setSaving(true)
-    await onSave({
-      ...form,
-      estimatedHours: form.estimatedHours === '' ? null : Number(form.estimatedHours),
-      actualHours:    form.actualHours    === '' ? null : Number(form.actualHours),
-    })
-    setSaving(false)
+    try {
+      await onSave({
+        ...form,
+        estimatedHours: form.estimatedHours === '' ? null : Number(form.estimatedHours),
+        actualHours:    form.actualHours    === '' ? null : Number(form.actualHours),
+      })
+    } finally { setSaving(false) }
   }
 
   return (

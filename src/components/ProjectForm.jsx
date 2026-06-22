@@ -38,8 +38,7 @@ export default function ProjectForm({ project, onSave, onClose }) {
     e.preventDefault()
     if (!form.name.trim()) return
     setSaving(true)
-    await onSave(form)
-    setSaving(false)
+    try { await onSave(form) } finally { setSaving(false) }
   }
 
   return (

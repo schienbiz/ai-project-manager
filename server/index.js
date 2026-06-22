@@ -1255,7 +1255,6 @@ app.get('/api/status', async (req, res) => {
 // ── Admin ─────────────────────────────────────────────────────────────────────
 const ADMIN_SERVICES = [
   { name: 'Relationship OS',  label: 'com.relationship-os.dev',    port: 3000, path: '/health' },
-  { name: 'Marketing Asst',   label: 'com.marketing-assistant.dev', port: 3001, path: '/' },
   { name: 'Proxy',            label: 'com.proxy.marketing',         port: 3002, path: '/' },
   { name: 'AI Learning Tool', label: 'com.ai-learning-tool.dev',    port: 3003, path: '/health' },
   { name: 'AI PM',            label: 'com.ai-project-manager.dev',  port: 3004, path: '/pm/api/status' },
@@ -2049,7 +2048,6 @@ const OPTIMIZE_SYSTEM_PROMPT = `你是 AI 自動化優化系統。只回傳 JSON
 const OPTIMIZABLE_SERVICES = [
   { name: 'Voice Trainer',    file: `${homedir()}/CloudSync/voice-trainer/server/index.js`,        label: 'com.voice-trainer',           selfRestart: false },
   { name: 'AI Learning Tool', file: `${homedir()}/CloudSync/ai-learning-tool/server.js`,           label: 'com.ai-learning-tool.dev',    selfRestart: false },
-  { name: 'Marketing Asst',   file: `${homedir()}/CloudSync/marketing-assistant/server.js`,        label: 'com.marketing-assistant.dev', selfRestart: false },
   { name: 'AI PM',            file: `${homedir()}/CloudSync/ai-project-manager/server/index.js`,   label: 'com.ai-project-manager.dev',  selfRestart: true  },
 ]
 

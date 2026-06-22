@@ -309,10 +309,11 @@ function NotesSection({ notes, onCreateNote, onDeleteNote }) {
     const trimmed = text.trim()
     if (!trimmed) return
     setSaving(true)
-    await onCreateNote(trimmed)
-    setText('')
-    setSaving(false)
-    taRef.current?.focus()
+    try {
+      await onCreateNote(trimmed)
+      setText('')
+      taRef.current?.focus()
+    } finally { setSaving(false) }
   }
 
   const handleKey = (e) => {

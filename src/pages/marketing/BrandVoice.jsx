@@ -33,9 +33,10 @@ export default function BrandVoice() {
 
   const handleSave = async () => {
     setSaving(true)
-    await saveBrand(brand)
-    setSaving(false)
-    setSaved(true)
+    try {
+      await saveBrand(brand)
+      setSaved(true)
+    } finally { setSaving(false) }
   }
 
   return (
