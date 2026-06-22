@@ -56,10 +56,15 @@ export default function CampaignPlanner() {
   const handleSave = async () => {
     if (!name || !goal || !startDate || !endDate) return
     setSaving(true)
-    const saved = await saveCampaign({ name, goal, audience, budget, startDate, endDate, channels, plan: output })
-    setCampaigns(prev => [saved, ...prev])
-    setSaving(false)
-    setSavedCampaign(true)
+    try {
+      const saved = await saveCampaign({ name, goal, audience, budget, startDate, endDate, channels, plan: output })
+      setCampaigns(prev => [saved, ...prev])
+      setSavedCampaign(true)
+    } catch (err) {
+      setOutput(prev => prev + `\n\n⚠️ Save failed: ${err.message}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleDelete = (id) => setPendingDelete(id)
