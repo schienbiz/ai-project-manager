@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api, streamAgent } from '../api.js'
+import { api, streamAgent, adminAuth } from '../api.js'
 
 const PROJECT_ORDER = [
   'AI PM', '2560戰法', 'Marketing', 'AI Learning', 'Voice Trainer',
@@ -206,6 +206,10 @@ function SectionHeader({ title, ok, total, right, collapsed, onToggle }) {
 }
 
 export default function AdminDashboard({ onBack }) {
+  const [authRequired, setAuthRequired] = useState(!adminAuth.get())
+  const [tokenInput, setTokenInput]     = useState('')
+  const [tokenError, setTokenError]     = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)
   const [data, setData]         = useState(null)
   const [loading, setLoading]   = useState(true)
   const [restarting, setRestarting] = useState({})
@@ -244,9 +248,28 @@ export default function AdminDashboard({ onBack }) {
   const [projects, setProjects]           = useState([])
   const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
-  const loadVault = useCallback(async () => {
-    try { setVault(await api.getVault()) } catch {}
+  const handleAuthError = useCallback((err) => {
+    if (err?.status === 401 || err?.message === 'Unauthorized') {
+      adminAuth.clear(); setAuthRequired(true)
+    }
   }, [])
+
+  const handleTokenSubmit = useCallback(async (e) => {
+    e.preventDefault()
+    adminAuth.set(tokenInput.trim())
+    try {
+      await api.getAdminStatus()
+      setTokenError(false)
+      setAuthRequired(false)
+      setTokenInput('')
+    } catch (err) {
+      if (err?.status === 401) { adminAuth.clear(); setTokenError(true) }
+    }
+  }, [tokenInput])
+
+  const loadVault = useCallback(async () => {
+    try { setVault(await api.getVault()) } catch (e) { handleAuthError(e) }
+  }, [handleAuthError])
 
   const loadProjects = useCallback(async () => {
     try { setProjects(await api.getProjects()) } catch {}
@@ -266,11 +289,12 @@ export default function AdminDashboard({ onBack }) {
       setLastRefresh(new Date())
       setError(null)
     } catch (e) {
-      setError(e.message)
+      handleAuthError(e)
+      if (e?.status !== 401) setError(e.message)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [handleAuthError])
 
   useEffect(() => {
     refresh()
@@ -316,13 +340,12 @@ export default function AdminDashboard({ onBack }) {
   }
 
   const handleVaultDelete = async (name) => {
-    if (!confirm(`刪除 ${name}?`)) return
-    await api.deleteVaultKey(name)
-    await loadVault()
+    if (pendingDelete !== name) { setPendingDelete(name); return }
+    setPendingDelete(null)
+    try { await api.deleteVaultKey(name); await loadVault() } catch (e) { handleAuthError(e) }
   }
 
   const handleSendDigest = async () => {
-    if (!confirm('立即發送 Morning Digest 到 Telegram？')) return
     setSendingDigest(true)
     try {
       await api.sendDigestNow()
@@ -343,7 +366,8 @@ export default function AdminDashboard({ onBack }) {
       null,
       (chunk) => setAgentAnalysisOutput(prev => prev + chunk),
       () => setAgentAnalysisRunning(false),
-      (err) => { setAgentAnalysisOutput(`❌ 錯誤: ${err}`); setAgentAnalysisRunning(false) }
+      (err) => { handleAuthError({ status: err === 'Unauthorized' ? 401 : 0 }); setAgentAnalysisOutput(`❌ 錯誤: ${err}`); setAgentAnalysisRunning(false) },
+      { 'x-admin-token': adminAuth.get() }
     )
   }, [])
 
@@ -355,9 +379,10 @@ export default function AdminDashboard({ onBack }) {
     try {
       const r = await fetch('/pm/api/admin/agent-optimize/preview', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': adminAuth.get() },
         body: JSON.stringify({ analysisText })
       })
+      if (r.status === 401) { handleAuthError({ status: 401 }); return }
       const plan = await r.json()
       setOptimizePreview(plan.actions?.length ? plan.actions : [])
     } catch (e) {
@@ -378,7 +403,8 @@ export default function AdminDashboard({ onBack }) {
       (s) => setOptimizeSteps(prev => [...prev, s]),
       (chunk) => setOptimizeOutput(prev => prev + chunk),
       () => setOptimizeRunning(false),
-      (err) => { setOptimizeSteps(prev => [...prev, `❌ 錯誤: ${err}`]); setOptimizeRunning(false) }
+      (err) => { setOptimizeSteps(prev => [...prev, `❌ 錯誤: ${err}`]); setOptimizeRunning(false) },
+      { 'x-admin-token': adminAuth.get() }
     )
   }, [])
 
@@ -392,7 +418,8 @@ export default function AdminDashboard({ onBack }) {
       (s) => setAuditSteps(prev => [...prev, s]),
       (chunk) => setAuditOutput(prev => prev + chunk),
       () => setAuditRunning(false),
-      (err) => { setAuditSteps(prev => [...prev, `❌ 錯誤: ${err}`]); setAuditRunning(false) }
+      (err) => { setAuditSteps(prev => [...prev, `❌ 錯誤: ${err}`]); setAuditRunning(false) },
+      { 'x-admin-token': adminAuth.get() }
     )
   }, [])
 
@@ -456,6 +483,28 @@ export default function AdminDashboard({ onBack }) {
       setTimeout(() => setCopyingKeys(c => { const n = { ...c }; delete n[name]; return n }), 1500)
     } catch (e) { alert(`Copy failed: ${e.message}`) }
   }
+
+  if (authRequired) return (
+    <div className="admin-dashboard" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+      <form onSubmit={handleTokenSubmit} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 32, width: 320, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
+        <div style={{ fontSize: 24, marginBottom: 8, textAlign: 'center' }}>🔐</div>
+        <h3 style={{ margin: '0 0 6px', fontSize: 15, textAlign: 'center', color: '#111827' }}>Admin Token</h3>
+        <p style={{ margin: '0 0 18px', fontSize: 12, color: '#6b7280', textAlign: 'center' }}>Enter ADMIN_TOKEN to access system admin</p>
+        <input
+          type="password"
+          autoFocus
+          value={tokenInput}
+          onChange={e => { setTokenInput(e.target.value); setTokenError(false) }}
+          placeholder="admin token…"
+          style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: `1px solid ${tokenError ? '#ef4444' : '#d1d5db'}`, fontSize: 13, boxSizing: 'border-box', marginBottom: 8, outline: 'none' }}
+        />
+        {tokenError && <p style={{ margin: '0 0 8px', fontSize: 11, color: '#ef4444' }}>Wrong token — try again</p>}
+        <button type="submit" disabled={!tokenInput.trim()} style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontSize: 13, fontWeight: 600, cursor: tokenInput.trim() ? 'pointer' : 'not-allowed', opacity: tokenInput.trim() ? 1 : 0.5 }}>
+          Unlock
+        </button>
+      </form>
+    </div>
+  )
 
   return (
     <div className="admin-dashboard">
@@ -980,7 +1029,14 @@ export default function AdminDashboard({ onBack }) {
                                   {revealedKeys[e.name] != null ? '●' : '○'}
                                 </button>
                                 <button className="btn btn-sm" onClick={() => setEditingKey(e.name)}>編輯</button>
-                                <button className="btn btn-sm btn-danger" onClick={() => handleVaultDelete(e.name)}>刪除</button>
+                                {pendingDelete === e.name ? (
+                                  <>
+                                    <button className="btn btn-sm btn-danger" onClick={() => handleVaultDelete(e.name)}>確認刪除</button>
+                                    <button className="btn btn-sm" onClick={() => setPendingDelete(null)}>取消</button>
+                                  </>
+                                ) : (
+                                  <button className="btn btn-sm btn-danger" onClick={() => setPendingDelete(e.name)}>刪除</button>
+                                )}
                               </span>
                             </div>
                           )}

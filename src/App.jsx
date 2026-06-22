@@ -22,6 +22,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('sidebarCollapsed') === '1')
   const [toasts, setToasts] = useState([])
   const [showCmdPalette, setShowCmdPalette] = useState(false)
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null)
   const toastId = useRef(0)
 
   const switchLang = (l) => { setLang(l); localStorage.setItem('lang', l) }
@@ -101,11 +102,14 @@ export default function App() {
     setEditingProject(null)
   }
 
-  const handleDeleteProject = async (id) => {
-    if (!confirm(t.deleteConfirm)) return
+  const handleDeleteProject = (id) => { setDeleteConfirmId(id) }
+
+  const doDeleteProject = async () => {
+    const id = deleteConfirmId
+    setDeleteConfirmId(null)
     await api.deleteProject(id)
     setProjects(prev => prev.filter(x => x.id !== id))
-    setTasks(prev => prev.filter(t => t.projectId !== id))
+    setTasks(prev => prev.filter(tk => tk.projectId !== id))
     setView('dashboard')
     setSelectedId(null)
     loadData()
@@ -249,6 +253,18 @@ export default function App() {
           onNewProject={() => { setShowProjectForm(true); setShowCmdPalette(false) }}
           onClose={() => setShowCmdPalette(false)}
         />
+      )}
+
+      {deleteConfirmId && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: '24px 28px', maxWidth: 340, width: '90%', boxShadow: '0 4px 24px rgba(0,0,0,0.18)' }}>
+            <p style={{ margin: '0 0 18px', color: '#374151', fontWeight: 500, fontSize: 14 }}>{t.deleteConfirm}</p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setDeleteConfirmId(null)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', color: '#374151', fontSize: 13 }}>取消</button>
+              <button onClick={doDeleteProject} style={{ padding: '6px 16px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>刪除</button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="toast-container">

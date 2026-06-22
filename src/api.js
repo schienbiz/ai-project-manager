@@ -1,3 +1,32 @@
+// ── Admin auth token (stored in sessionStorage, never in bundle) ──────────────
+const ADMIN_TOKEN_KEY = 'admin_token'
+export const adminAuth = {
+  get:   () => { try { return sessionStorage.getItem(ADMIN_TOKEN_KEY) || '' } catch { return '' } },
+  set:   (t) => { try { sessionStorage.setItem(ADMIN_TOKEN_KEY, t) } catch {} },
+  clear: () => { try { sessionStorage.removeItem(ADMIN_TOKEN_KEY) } catch {} },
+}
+function adminHeaders(extra = {}) {
+  return { 'Content-Type': 'application/json', 'x-admin-token': adminAuth.get(), ...extra }
+}
+function adminGet(url) {
+  return fetch(url, { headers: { 'x-admin-token': adminAuth.get() } }).then(r => {
+    if (r.status === 401) throw Object.assign(new Error('Unauthorized'), { status: 401 })
+    return r.json()
+  })
+}
+function adminPost(url, data) {
+  return fetch(url, { method: 'POST', headers: adminHeaders(), body: JSON.stringify(data) }).then(r => {
+    if (r.status === 401) throw Object.assign(new Error('Unauthorized'), { status: 401 })
+    return r.json()
+  })
+}
+function adminDel(url) {
+  return fetch(url, { method: 'DELETE', headers: { 'x-admin-token': adminAuth.get() } }).then(r => {
+    if (r.status === 401) throw Object.assign(new Error('Unauthorized'), { status: 401 })
+    return r.json()
+  })
+}
+
 const json = (r) => r.json()
 
 export const api = {
@@ -27,18 +56,18 @@ export const api = {
   createNote:      (data) => post('/pm/api/notes', data),
   deleteNote:      (id) => del(`/pm/api/notes/${id}`),
 
-  // Admin
-  getAdminStatus:  () => fetch('/pm/api/admin/status').then(json),
-  restartService:  (label) => post('/pm/api/admin/restart', { label }),
-  getVault:        () => fetch('/pm/api/admin/vault').then(json),
-  upsertVaultKey:  (data) => post('/pm/api/admin/vault', data),
-  deleteVaultKey:  (name) => del(`/pm/api/admin/vault/${encodeURIComponent(name)}`),
-  revealVaultKey:     (name) => fetch(`/pm/api/admin/vault/${encodeURIComponent(name)}/reveal`).then(json),
-  forceRefreshRender: () => post('/pm/api/admin/render/refresh', {}),
-  setRenderUsageConfig: (cfg) => post('/pm/api/admin/render/usage/config', cfg),
-  forceRefreshDbUsage: () => post('/pm/api/admin/db-usage/refresh', {}),
-  forceRefreshCloudinary: () => post('/pm/api/admin/cloudinary/refresh', {}),
-  sendDigestNow:      () => post('/pm/api/admin/digest/send-now', {}),
+  // Admin (all protected by x-admin-token)
+  getAdminStatus:       () => adminGet('/pm/api/admin/status'),
+  restartService:       (label) => adminPost('/pm/api/admin/restart', { label }),
+  getVault:             () => adminGet('/pm/api/admin/vault'),
+  upsertVaultKey:       (data) => adminPost('/pm/api/admin/vault', data),
+  deleteVaultKey:       (name) => adminDel(`/pm/api/admin/vault/${encodeURIComponent(name)}`),
+  revealVaultKey:       (name) => adminGet(`/pm/api/admin/vault/${encodeURIComponent(name)}/reveal`),
+  forceRefreshRender:   () => adminPost('/pm/api/admin/render/refresh', {}),
+  setRenderUsageConfig: (cfg) => adminPost('/pm/api/admin/render/usage/config', cfg),
+  forceRefreshDbUsage:  () => adminPost('/pm/api/admin/db-usage/refresh', {}),
+  forceRefreshCloudinary: () => adminPost('/pm/api/admin/cloudinary/refresh', {}),
+  sendDigestNow:        () => adminPost('/pm/api/admin/digest/send-now', {}),
 
   // AI helpers
   estimateTask:     (data) => post('/pm/api/ai/estimate', data),
@@ -56,13 +85,14 @@ function del(url) {
 }
 
 // SSE helper for agent endpoints — separates step logs from output chunks
-export async function streamAgent(endpoint, body, onStep, onChunk, onDone, onError) {
+export async function streamAgent(endpoint, body, onStep, onChunk, onDone, onError, extraHeaders = {}) {
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...extraHeaders },
       body: JSON.stringify(body),
     })
+    if (res.status === 401) { onError?.('Unauthorized'); return }
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()

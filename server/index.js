@@ -267,7 +267,8 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
         })
         done = true
         const s = providerStat(p.name); s.ok++; s.lastUsed = new Date().toISOString(); flushProviderStats()
-        return res.choices[0]?.message?.content?.trim() || null
+        const raw = res.choices[0]?.message?.content?.trim() || null
+        return raw?.replace(/<think>[\s\S]*?<\/think>/g, '').trim() || null
       })(),
       new Promise(resolve => setTimeout(() => {
         if (!done) console.warn(`[ai] ${p.name} timed out after ${p.timeout}ms`)
@@ -370,6 +371,14 @@ async function streamGenerate(res, system, userPrompt, maxTokens = 2048) {
 // ── Express setup ─────────────────────────────────────────────────────────────
 app.use(cors())
 app.use(express.json({ limit: '2mb' }))
+
+// ── Admin auth ────────────────────────────────────────────────────────────────
+const _adminToken = process.env.ADMIN_TOKEN
+function requireAdmin(req, res, next) {
+  if (!_adminToken) return next()
+  if (req.headers['x-admin-token'] === _adminToken) return next()
+  res.status(401).json({ error: 'Unauthorized' })
+}
 
 // Rewrite /pm/api/* → /api/*
 app.use((req, res, next) => {
@@ -1214,7 +1223,7 @@ app.get('/api/ai/digest/now', async (req, res) => {
   await sendMorningDigest().catch(e => console.error('[digest] manual trigger error:', e.message))
 })
 
-app.post('/api/admin/digest/send-now', async (req, res) => {
+app.post('/api/admin/digest/send-now', requireAdmin, async (req, res) => {
   res.json({ ok: true, message: 'Digest sending…' })
   await sendMorningDigest(true).catch(e => console.error('[digest] send-now error:', e.message))
 })
@@ -1584,7 +1593,7 @@ function saveVault(entries) {
   fs.writeFileSync(VAULT_PATH, JSON.stringify(entries, null, 2))
 }
 
-app.get('/api/admin/vault', (req, res) => {
+app.get('/api/admin/vault', requireAdmin, (req, res) => {
   const entries = loadVault().map(e => {
     const plain = decryptVaultValue(e.encryptedValue)
     return {
@@ -1605,7 +1614,7 @@ function daysUntil(isoDate) {
   return Math.floor((new Date(isoDate) - Date.now()) / 86_400_000)
 }
 
-app.post('/api/admin/vault', (req, res) => {
+app.post('/api/admin/vault', requireAdmin, (req, res) => {
   const { name, description, expiry, value, project } = req.body
   if (!name || !/^[A-Za-z0-9_\-. ]+$/.test(name)) return res.status(400).json({ error: 'Invalid name' })
   const entries = loadVault()
@@ -1627,7 +1636,7 @@ app.post('/api/admin/vault', (req, res) => {
   res.json({ ok: true, name: entry.name })
 })
 
-app.delete('/api/admin/vault/:name', (req, res) => {
+app.delete('/api/admin/vault/:name', requireAdmin, (req, res) => {
   const name = decodeURIComponent(req.params.name)
   const entries = loadVault().filter(e => e.name !== name)
   saveVault(entries)
@@ -1635,7 +1644,7 @@ app.delete('/api/admin/vault/:name', (req, res) => {
   res.json({ ok: true })
 })
 
-app.get('/api/admin/vault/:name/reveal', (req, res) => {
+app.get('/api/admin/vault/:name/reveal', requireAdmin, (req, res) => {
   const name = decodeURIComponent(req.params.name)
   const entry = loadVault().find(e => e.name === name)
   if (!entry) return res.status(404).json({ error: 'not found' })
@@ -1644,13 +1653,13 @@ app.get('/api/admin/vault/:name/reveal', (req, res) => {
   res.json({ value })
 })
 
-app.post('/api/admin/render/refresh', (req, res) => {
+app.post('/api/admin/render/refresh', requireAdmin, (req, res) => {
   refreshRenderCache().catch(e => console.error('[render] force-refresh error:', e.message))
   res.json({ ok: true })
 })
 
 // Tune usage cap + alert thresholds from the admin UI. thresholdsPct = integer percentages.
-app.post('/api/admin/render/usage/config', (req, res) => {
+app.post('/api/admin/render/usage/config', requireAdmin, (req, res) => {
   const next = { capHours: _renderUsageConfig.capHours, thresholds: _renderUsageConfig.thresholds }
   if (req.body?.capHours != null) next.capHours = Number(req.body.capHours)
   if (Array.isArray(req.body?.thresholdsPct)) next.thresholds = req.body.thresholdsPct.map(n => Number(n) / 100)
@@ -1795,7 +1804,7 @@ async function refreshDbUsage() {
 setInterval(() => refreshDbUsage().catch(e => console.error('[db-usage] refresh error:', e.message)), 6 * 3600_000)
 setTimeout(() => refreshDbUsage().catch(() => {}), 20_000)
 
-app.post('/api/admin/db-usage/refresh', (req, res) => {
+app.post('/api/admin/db-usage/refresh', requireAdmin, (req, res) => {
   refreshDbUsage().catch(e => console.error('[db-usage] force-refresh error:', e.message))
   res.json({ ok: true })
 })
@@ -1900,12 +1909,12 @@ setInterval(() => {
   }
 }, 5 * 60_000)
 
-app.post('/api/admin/cloudinary/refresh', (req, res) => {
+app.post('/api/admin/cloudinary/refresh', requireAdmin, (req, res) => {
   refreshCloudinaryUsage().catch(e => console.error('[cloudinary] force-refresh error:', e.message))
   res.json({ ok: true })
 })
 
-app.get('/api/admin/status', async (req, res) => {
+app.get('/api/admin/status', requireAdmin, async (req, res) => {
   // Dashboard is open (this endpoint is only polled by AdminDashboard) → kick a lazy,
   // non-blocking render-health refresh. Self-throttled to ≤1 upstream poll/60s and skipped
   // entirely when nobody is watching, so it never becomes a 24/7 keepalive (see maybeRefreshRenderCache).
@@ -1998,7 +2007,7 @@ app.get('/api/admin/status', async (req, res) => {
   })
 })
 
-app.post('/api/admin/restart', (req, res) => {
+app.post('/api/admin/restart', requireAdmin, (req, res) => {
   const { label } = req.body
   if (!label || !ALLOWED_LABELS.has(label)) return res.status(400).json({ error: 'Invalid label' })
   try {
@@ -2010,7 +2019,7 @@ app.post('/api/admin/restart', (req, res) => {
   }
 })
 
-app.get('/api/admin/ssh-diag', (req, res) => {
+app.get('/api/admin/ssh-diag', requireAdmin, (req, res) => {
   let sshdUp = false
   try { execSync('nc -z -w 2 localhost 22', { timeout: 3000 }); sshdUp = true } catch {}
   let borelog = '', boreout = ''
@@ -2044,7 +2053,7 @@ const OPTIMIZABLE_SERVICES = [
 ]
 
 // Preview endpoint — returns parsed actions as JSON without applying anything
-app.post('/api/admin/agent-optimize/preview', async (req, res) => {
+app.post('/api/admin/agent-optimize/preview', requireAdmin, async (req, res) => {
   try {
     const { analysisText } = req.body
     if (!analysisText) return res.status(400).json({ error: '缺少分析內容' })
@@ -2062,7 +2071,7 @@ app.post('/api/admin/agent-optimize/preview', async (req, res) => {
   }
 })
 
-app.post('/api/admin/agent-optimize', async (req, res) => {
+app.post('/api/admin/agent-optimize', requireAdmin, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
@@ -2185,7 +2194,7 @@ app.post('/api/admin/agent-optimize', async (req, res) => {
 })
 
 // ── AI Agent Analysis ─────────────────────────────────────────────────────────
-app.post('/api/admin/agent-analysis', async (req, res) => {
+app.post('/api/admin/agent-analysis', requireAdmin, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
@@ -2273,7 +2282,7 @@ ${expiryWarning}
 })
 
 // ── System Audit ─────────────────────────────────────────────────────────────
-app.post('/api/admin/audit', async (req, res) => {
+app.post('/api/admin/audit', requireAdmin, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
