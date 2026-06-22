@@ -12,14 +12,18 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "nodemailer": "^9.0.1",
     "openai": "^4.52.7",
     "pg": "^8.21.0",
     "undici": "^6.19.8"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.19",
     "vite": "^5.3.5"
   }
 }

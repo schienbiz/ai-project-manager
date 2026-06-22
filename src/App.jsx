@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard.jsx'
 import ProjectDetail from './components/ProjectDetail.jsx'
 import ProjectForm from './components/ProjectForm.jsx'
 import AdminDashboard from './components/AdminDashboard.jsx'
+import MarketingApp from './components/MarketingApp.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 
 export default function App() {
@@ -191,6 +192,7 @@ export default function App() {
         onSelect={selectProject}
         onDashboard={() => setView('dashboard')}
         onAdmin={() => setView('admin')}
+        onMarketing={() => setView('marketing')}
         onNewProject={() => { setEditingProject(null); setShowProjectForm(true) }}
         view={view}
         collapsed={sidebarCollapsed}
@@ -200,6 +202,10 @@ export default function App() {
       <div className="main">
         {view === 'admin' && (
           <AdminDashboard onBack={() => setView('dashboard')} />
+        )}
+
+        {view === 'marketing' && (
+          <MarketingApp onBack={() => setView('dashboard')} />
         )}
 
         {view === 'dashboard' && (

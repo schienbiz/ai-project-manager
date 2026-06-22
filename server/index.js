@@ -20,6 +20,7 @@ import { execSync } from 'child_process'
 import { fetch as undiciFetch } from 'undici'
 import express from 'express'
 import OpenAI from 'openai'
+import nodemailer from 'nodemailer'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -2383,6 +2384,146 @@ ${providerStatus.map(p => `${!p.configured ? '⚪' : p.coolingDown ? '⚠️' : 
     clearInterval(keepAlive)
     res.end()
   }
+})
+
+// ── Marketing module ──────────────────────────────────────────────────────────
+
+const MKTG_DIR = path.join(__dirname, '../data/marketing')
+if (!fs.existsSync(MKTG_DIR)) fs.mkdirSync(MKTG_DIR, { recursive: true })
+
+const MKTG_BRAND_FILE     = path.join(MKTG_DIR, 'brand.json')
+const MKTG_CAMPAIGNS_FILE = path.join(MKTG_DIR, 'campaigns.json')
+const MKTG_HISTORY_FILE   = path.join(MKTG_DIR, 'history.json')
+
+function mktgRead(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf-8')) } catch { return fallback }
+}
+function mktgWrite(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2))
+}
+
+function buildBrandContext(brand) {
+  if (!brand || !Object.keys(brand).length) return ''
+  const lines = []
+  if (brand.name)        lines.push(`Brand name: ${brand.name}`)
+  if (brand.industry)    lines.push(`Industry: ${brand.industry}`)
+  if (brand.tone)        lines.push(`Tone of voice: ${brand.tone}`)
+  if (brand.audience)    lines.push(`Target audience: ${brand.audience}`)
+  if (brand.values)      lines.push(`Brand values: ${brand.values}`)
+  if (brand.keywords)    lines.push(`Key messages / keywords: ${brand.keywords}`)
+  if (brand.exampleCopy) lines.push(`Example copy style:\n${brand.exampleCopy}`)
+  return `\n\n## Brand Context\n${lines.join('\n')}`
+}
+
+const mktgMailer = (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  ? nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+      tls: { rejectUnauthorized: true },
+    })
+  : null
+
+// send-email is protected by requireAdmin (P0 security fix — can send from Gmail account)
+app.post('/api/marketing/send-email', requireAdmin, async (req, res) => {
+  if (!mktgMailer) return res.status(503).json({ error: 'Email not configured (GMAIL_USER / GMAIL_APP_PASSWORD missing)' })
+  const { to, subject, text, html } = req.body
+  if (!to || !subject) return res.status(400).json({ error: 'Missing to or subject' })
+  try {
+    await mktgMailer.sendMail({ from: process.env.GMAIL_USER, to, subject, text, html })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/marketing/brand', (req, res) => res.json(mktgRead(MKTG_BRAND_FILE, {})))
+app.post('/api/marketing/brand', (req, res) => { mktgWrite(MKTG_BRAND_FILE, req.body); res.json({ ok: true }) })
+
+app.get('/api/marketing/campaigns', (req, res) => res.json(mktgRead(MKTG_CAMPAIGNS_FILE, [])))
+app.post('/api/marketing/campaigns', (req, res) => {
+  const list = mktgRead(MKTG_CAMPAIGNS_FILE, [])
+  const item = { ...req.body, id: Date.now().toString(), createdAt: new Date().toISOString() }
+  list.unshift(item)
+  mktgWrite(MKTG_CAMPAIGNS_FILE, list)
+  res.json(item)
+})
+app.delete('/api/marketing/campaigns/:id', (req, res) => {
+  mktgWrite(MKTG_CAMPAIGNS_FILE, mktgRead(MKTG_CAMPAIGNS_FILE, []).filter(c => c.id !== req.params.id))
+  res.json({ ok: true })
+})
+
+app.get('/api/marketing/history', (req, res) => res.json(mktgRead(MKTG_HISTORY_FILE, [])))
+app.post('/api/marketing/history', (req, res) => {
+  const list = mktgRead(MKTG_HISTORY_FILE, [])
+  const item = { ...req.body, id: Date.now().toString(), createdAt: new Date().toISOString() }
+  list.unshift(item)
+  if (list.length > 50) list.splice(50)
+  mktgWrite(MKTG_HISTORY_FILE, list)
+  res.json(item)
+})
+app.delete('/api/marketing/history/:id', (req, res) => {
+  mktgWrite(MKTG_HISTORY_FILE, mktgRead(MKTG_HISTORY_FILE, []).filter(h => h.id !== req.params.id))
+  res.json({ ok: true })
+})
+
+app.post('/api/marketing/generate', async (req, res) => {
+  const { type, topic, platform, tone, length, brief, brand } = req.body
+  const brandCtx = buildBrandContext(brand)
+  const system = `You are an expert marketing copywriter and content strategist with 15 years of experience across B2B and B2C brands. You write compelling, on-brand content that converts.${brandCtx}`
+  const typeInstructions = {
+    'social-post':   `Write ${length === 'long' ? '3 variations of' : 'a'} ${platform} post about the topic below. Include relevant hashtags. Keep the tone ${tone || 'engaging and authentic'}.`,
+    'blog':          `Write a complete, SEO-optimized blog article about the topic below. Include: headline, meta description, introduction, 3-5 sections with subheadings, and a conclusion with CTA. Tone: ${tone || 'professional and informative'}.`,
+    'ad-copy':       `Write ${length === 'long' ? '3 variations of' : 'a'} high-converting ad copy for the topic below. Include: headline, primary text, and CTA. Format for ${platform || 'general digital ads'}. Tone: ${tone || 'direct and persuasive'}.`,
+    'email':         `Write a complete marketing email about the topic below. Include: subject line (give 3 options), preview text, greeting, body copy, and CTA button text. Tone: ${tone || 'friendly and professional'}.`,
+    'product-desc':  `Write a compelling product description for the topic below. Include: headline, key benefits (as bullet points), full description paragraph, and a CTA. Length: ${length || 'medium'}. Tone: ${tone || 'enthusiastic and clear'}.`,
+    'press-release': `Write a professional press release about the topic below. Include: headline, dateline, lead paragraph (who/what/when/where/why), body paragraphs, boilerplate, and contact info placeholder. Tone: formal and newsworthy.`,
+  }
+  const instruction = typeInstructions[type] || 'Write compelling marketing copy for the topic below.'
+  await streamGenerate(res, system, `${instruction}\n\nTopic / Brief:\n${topic || brief}`)
+})
+
+app.post('/api/marketing/analyze', async (req, res) => {
+  const { data, context, brand } = req.body
+  const brandCtx = buildBrandContext(brand)
+  const system = `You are a data-driven marketing analyst. You turn raw metrics into clear, actionable insights that non-technical stakeholders can act on immediately.${brandCtx}`
+  const userPrompt = `Analyze the following marketing data and provide:
+1. **Executive Summary** (2-3 sentences)
+2. **Top 3 Wins** — what's working well
+3. **Top 3 Issues / Opportunities** — what needs attention
+4. **Recommended Actions** — specific next steps with expected impact
+5. **Key Metrics to Watch** — what to track going forward
+
+Context: ${context || 'General marketing performance review'}
+
+Raw Data:
+\`\`\`
+${data}
+\`\`\``
+  await streamGenerate(res, system, userPrompt)
+})
+
+app.post('/api/marketing/plan-campaign', async (req, res) => {
+  const { name, goal, audience, budget, startDate, endDate, channels, brand } = req.body
+  const brandCtx = buildBrandContext(brand)
+  const system = `You are a senior marketing strategist who builds data-driven campaign plans that deliver measurable results.${brandCtx}`
+  const userPrompt = `Create a detailed marketing campaign plan with the following parameters:
+
+**Campaign Name:** ${name}
+**Goal / Objective:** ${goal}
+**Target Audience:** ${audience}
+**Budget:** ${budget || 'Not specified'}
+**Timeline:** ${startDate} to ${endDate}
+**Channels:** ${channels?.join(', ') || 'To be determined'}
+
+Deliver a complete plan including:
+1. **Campaign Strategy & Messaging Framework**
+2. **Channel Breakdown** — how to allocate effort/budget per channel
+3. **Content Calendar** — week-by-week content plan
+4. **Key Messages & Hooks** — 3-5 core messages with supporting copy angles
+5. **KPIs & Success Metrics** — what to measure and target numbers
+6. **Budget Allocation** (if budget provided)
+7. **Potential Risks & Mitigation**`
+  await streamGenerate(res, system, userPrompt)
 })
 
 // ── Frontend ──────────────────────────────────────────────────────────────────
