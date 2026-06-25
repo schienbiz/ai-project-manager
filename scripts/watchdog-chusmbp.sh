@@ -1,7 +1,12 @@
 #!/bin/bash
-# ⚠️ 版控鏡像：實際在跑的是 chusMBp 的 ~/watchdog.sh（com.chusmbp.watchdog LaunchAgent
-# ProgramArguments 指向 /Users/chuchuchien0430/watchdog.sh，非本 repo 檔）。改行為要改 ~/watchdog.sh
-# 並回鏡像到此。2026-06-20 同步：ROS HTTP-kill 檢查停用 + 自監控心跳 /tmp/watchdog-hb。
+# ⚠️ 版控鏡像（MIRROR ONLY — NOT EXECUTED）：實際在跑的是 chusMBp 的 ~/watchdog.sh
+# （com.chusmbp.watchdog LaunchAgent ProgramArguments 指向 /Users/chuchuchien0430/watchdog.sh，
+# 非本 repo 檔）。改行為必須 SSH 直改 ~/watchdog.sh，完成後再把變更同步回此鏡像。
+# 直接改此檔不會影響任何執行中的服務。
+#
+# 鏡像同步歷史：
+#   2026-06-20：ROS HTTP-kill 檢查停用 + 自監控心跳 /tmp/watchdog-hb
+#   2026-06-25：com.marketing-assistant.dev 從 NODE_CA_PLISTS + check_service 移除（Marketing 已併入 AI-PM）
 # chusMBp service watchdog — runs every 5 min via LaunchAgent
 # Checks all 6 services, restarts dead ones, sends Telegram alert on action taken.
 
@@ -20,7 +25,8 @@ RESTARTED=()
 # Node.js 20 on macOS Monterey doesn't trust GoDaddy G2 (used by api.telegram.org)
 # unless NODE_EXTRA_CA_CERTS=/etc/ssl/cert.pem is set. This env var must exist in
 # each service plist's EnvironmentVariables. Check and auto-fix if missing.
-NODE_CA_PLISTS=(com.relationship-os.dev com.ai-learning-tool.dev com.ai-project-manager.dev com.marketing-assistant.dev com.proxy.marketing)
+NODE_CA_PLISTS=(com.relationship-os.dev com.ai-learning-tool.dev com.ai-project-manager.dev com.proxy.marketing)
+# com.marketing-assistant.dev removed 2026-06-22: Marketing merged into AI-PM (port 3001 released)
 CA_FIXED=0
 for svc in "${NODE_CA_PLISTS[@]}"; do
   plist_file="$HOME/Library/LaunchAgents/${svc}.plist"
@@ -65,7 +71,7 @@ check_service() {
 
 check_service "com.ai-project-manager.dev"   "http://localhost:3004/pm/api/status"
 check_service "com.ai-learning-tool.dev"      "http://localhost:3003/health"
-check_service "com.marketing-assistant.dev"   "http://localhost:3001/health"
+# check_service "com.marketing-assistant.dev" — removed 2026-06-22: merged into AI-PM; port 3001 released
 # 2026-06-20 停用: ROS Neon compute 配額耗盡→3000永不bind→此HTTP檢查每5分鐘殺活進程(339次)+洗版,且修不了外部Neon根因。plist KeepAlive管真crash,ROS會在Neon重置後自動serve。
 # check_service "com.relationship-os.dev"       "http://localhost:3000/health"
 check_service "com.proxy.marketing"           "http://localhost:3002/health"
