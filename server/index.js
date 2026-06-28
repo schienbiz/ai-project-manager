@@ -35,13 +35,13 @@ dotenv.config()
 const { Pool } = pg
 
 // ── Database ──────────────────────────────────────────────────────────────────
-// Use CockroachDB CA cert if present (~/.postgresql/root.crt), otherwise fall
-// back to Node.js built-in CAs. Needed on macOS Monterey (chusMBp) whose
-// CA bundle doesn't include the intermediate used by CockroachDB Serverless.
+// chusMBp macOS: ~/.postgresql/root.crt = Supabase Root 2021 CA → verify-full
+// Render Docker / other Linux: no root.crt → rejectUnauthorized:false
+// (Supabase uses self-signed CA not in Node.js built-in bundle; still encrypted)
 const _rootCrt = path.join(homedir(), '.postgresql', 'root.crt')
 const _sslOpts = fs.existsSync(_rootCrt)
   ? { rejectUnauthorized: true, ca: fs.readFileSync(_rootCrt).toString() }
-  : { rejectUnauthorized: true }
+  : { rejectUnauthorized: false }
 
 // Strip sslmode from URL — pg driver's sslmode param overrides the ssl config
 // object, preventing the ca cert from being used on macOS Monterey (chusMBp).
@@ -2547,7 +2547,14 @@ app.get('/health', (req, res) => res.json({ ok: true, service: 'ai-project-manag
 const PORT = process.env.PORT || 3004
 
 async function start() {
-  await initDb()
+  // DB unavailable (e.g. CockroachDB monthly RU limit) → warn and continue in
+  // degraded mode. DB-dependent routes return 500; the process stays up so the
+  // watchdog stops the SSH restart storm and monitoring resumes when DB recovers.
+  try {
+    await initDb()
+  } catch (err) {
+    console.warn(`[ai-pm] DB unavailable — degraded mode (DB routes return 500): ${err.message}`)
+  }
 
   // Restore digest state from DB
   try {
