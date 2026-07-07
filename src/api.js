@@ -32,7 +32,6 @@ const json = (r) => r.json()
 export const api = {
   // Dashboard
   getDashboard:    () => fetch('/pm/api/dashboard').then(json),
-  getStatus:       () => fetch('/pm/api/status').then(json),
 
   // Projects
   getProjects:     () => fetch('/pm/api/projects').then(json),
@@ -47,7 +46,6 @@ export const api = {
   getRunningTasks: () => fetch('/pm/api/tasks/running').then(json),
   createTask:      (data) => post('/pm/api/tasks', data),
   updateTask:      (id, data) => put(`/pm/api/tasks/${id}`, data),
-  bulkUpdateTasks: (updates) => put('/pm/api/tasks/bulk', updates),
   deleteTask:      (id) => del(`/pm/api/tasks/${id}`),
   retryAgent:      (id, lang) => post(`/pm/api/tasks/${id}/agent/retry`, { lang }),
 

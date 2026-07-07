@@ -205,6 +205,21 @@ function SectionHeader({ title, ok, total, right, collapsed, onToggle }) {
   )
 }
 
+// Shared left block for Local / ATung / Render service cards (dot + name + meta + latency)
+function SvcCardBody({ name, healthy, meta, latency, trend, ellipsis }) {
+  return (
+    <div className="admin-svc-left">
+      <span className={`admin-dot ${healthy ? 'dot-ok' : 'dot-err'}`} />
+      <div>
+        <div className="admin-svc-name">{name}</div>
+        <div className={`admin-svc-meta${ellipsis ? ' admin-svc-meta-ellipsis' : ''}`}>
+          {meta} · <span className={latencyClass(latency)}>{latency}ms<LatencyTrend delta={trend} /></span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AdminDashboard({ onBack }) {
   const [authRequired, setAuthRequired] = useState(!adminAuth.get())
   const [tokenInput, setTokenInput]     = useState('')
@@ -318,7 +333,7 @@ export default function AdminDashboard({ onBack }) {
     try { localStorage.setItem('admin-collapsed', JSON.stringify(collapsed)) } catch {}
   }, [collapsed])
 
-  const handleRestart = async (label, name) => {
+  const handleRestart = async (label) => {
     if (confirmRestart !== label) { setConfirmRestart(label); return }
     setConfirmRestart(null)
     setRestarting(r => ({ ...r, [label]: true }))
@@ -539,26 +554,18 @@ export default function AdminDashboard({ onBack }) {
             {!collapsed.local && <div className="admin-service-grid-2col">
               {data.services.map(svc => (
                 <div key={svc.label} className={`admin-service-card ${svc.healthy ? 'healthy' : 'unhealthy'}`}>
-                  <div className="admin-svc-left">
-                    <span className={`admin-dot ${svc.healthy ? 'dot-ok' : 'dot-err'}`} />
-                    <div>
-                      <div className="admin-svc-name">{svc.name}</div>
-                      <div className="admin-svc-meta">
-                        :{svc.port} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms<LatencyTrend delta={data._trends?.[svc.label]} /></span>
-                      </div>
-                    </div>
-                  </div>
+                  <SvcCardBody name={svc.name} healthy={svc.healthy} meta={`:${svc.port} · ${svc.status || 'no response'}`} latency={svc.latency} trend={data._trends?.[svc.label]} />
                   {confirmRestart === svc.label ? (
                     <span className="admin-restart-confirm">
                       Sure?
-                      <button className="btn btn-sm btn-danger" onClick={() => handleRestart(svc.label, svc.name)}>✓</button>
+                      <button className="btn btn-sm btn-danger" onClick={() => handleRestart(svc.label)}>✓</button>
                       <button className="btn btn-sm" onClick={() => setConfirmRestart(null)}>✕</button>
                     </span>
                   ) : (
                     <button
                       className="btn btn-sm"
                       disabled={restarting[svc.label]}
-                      onClick={() => handleRestart(svc.label, svc.name)}
+                      onClick={() => handleRestart(svc.label)}
                     >
                       {restarting[svc.label] ? '…' : 'Restart'}
                     </button>
@@ -607,15 +614,7 @@ export default function AdminDashboard({ onBack }) {
               {!collapsed.atung && <div className="admin-service-grid-2col">
                 {data.atungServices.map(svc => (
                   <div key={`${svc.host}:${svc.port}`} className={`admin-service-card ${svc.healthy ? 'healthy' : 'unhealthy'}`}>
-                    <div className="admin-svc-left">
-                      <span className={`admin-dot ${svc.healthy ? 'dot-ok' : 'dot-err'}`} />
-                      <div>
-                        <div className="admin-svc-name">{svc.name}</div>
-                        <div className="admin-svc-meta">
-                          :{svc.port} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms<LatencyTrend delta={data._trends?.[svc.label]} /></span>
-                        </div>
-                      </div>
-                    </div>
+                    <SvcCardBody name={svc.name} healthy={svc.healthy} meta={`:${svc.port} · ${svc.status || 'no response'}`} latency={svc.latency} trend={data._trends?.[svc.label]} />
                     <span className="admin-atung-badge">ATung</span>
                   </div>
                 ))}
@@ -660,15 +659,7 @@ export default function AdminDashboard({ onBack }) {
                     onClick={() => window.open(`https://${svc.host}`, '_blank')}
                     title={`Open https://${svc.host}`}
                   >
-                    <div className="admin-svc-left">
-                      <span className={`admin-dot ${svc.healthy ? 'dot-ok' : 'dot-err'}`} />
-                      <div>
-                        <div className="admin-svc-name">{svc.name}</div>
-                        <div className="admin-svc-meta admin-svc-meta-ellipsis">
-                          {svc.host} · {svc.status || 'no response'} · <span className={latencyClass(svc.latency)}>{svc.latency}ms<LatencyTrend delta={data._trends?.[svc.host]} /></span>
-                        </div>
-                      </div>
-                    </div>
+                    <SvcCardBody name={svc.name} healthy={svc.healthy} meta={`${svc.host} · ${svc.status || 'no response'}`} latency={svc.latency} trend={data._trends?.[svc.host]} ellipsis />
                     <span className={`admin-svc-meta render-status-badge ${svc.healthy ? 'render-ok' : 'render-err'}`}>
                       {svc.healthy ? 'UP ↗' : 'DOWN'}
                     </span>

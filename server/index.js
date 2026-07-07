@@ -595,30 +595,6 @@ app.post('/api/tasks', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.put('/api/tasks/bulk', async (req, res) => {
-  try {
-    const updates = req.body
-    for (const u of updates) {
-      await db.query(
-        `UPDATE tasks SET
-           title=COALESCE($1,title), description=COALESCE($2,description),
-           status=COALESCE($3,status), priority=COALESCE($4,priority),
-           estimated_hours=COALESCE($5,estimated_hours), actual_hours=COALESCE($6,actual_hours),
-           due_date=COALESCE($7,due_date), assignee=COALESCE($8,assignee),
-           sort_order=COALESCE($9,sort_order), agent_type=COALESCE($10,agent_type),
-           agent_status=COALESCE($11,agent_status), agent_output=COALESCE($12,agent_output),
-           updated_at=$13
-         WHERE id=$14`,
-        [u.title, u.description, u.status, u.priority,
-         u.estimatedHours, u.actualHours, u.dueDate, u.assignee,
-         u.sortOrder, u.agentType, u.agentStatus, u.agentOutput,
-         now(), u.id]
-      )
-    }
-    res.json({ ok: true })
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
 async function runAgentBackground(taskId, projectId, lang) {
   let task, project
   try {
@@ -2017,16 +1993,6 @@ app.post('/api/admin/restart', requireAdmin, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
-})
-
-app.get('/api/admin/ssh-diag', requireAdmin, (req, res) => {
-  let sshdUp = false
-  try { execSync('nc -z -w 2 localhost 22', { timeout: 3000 }); sshdUp = true } catch {}
-  let borelog = '', boreout = ''
-  try { borelog = fs.readFileSync('/tmp/bore-ssh.log', 'utf-8').trim().split('\n').slice(-15).join('\n') } catch {}
-  try { boreout = fs.readFileSync('/tmp/bore-ssh-output.log', 'utf-8').trim().slice(-500) } catch {}
-  const portMatch = boreout.match(/bore\.pub:(\d+)/)
-  res.json({ sshdUp, borePort: portMatch ? portMatch[1] : null, borelog, boreout })
 })
 
 // ── AI Agent Optimize ────────────────────────────────────────────────────────
