@@ -43,6 +43,7 @@ should_notify() {
 
 if [ -n "$PORT" ]; then
   echo "[bore-ssh] $(date): tunnel active at bore.pub:$PORT"
+  echo "$PORT" > /tmp/bore-ssh-current.txt
   if should_notify; then
     date +%s > "$COOLDOWN_FILE"
     tg "🔑 *chusMBp SSH Fallback (bore)*

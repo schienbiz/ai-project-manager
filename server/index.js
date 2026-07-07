@@ -60,6 +60,13 @@ pool.on('error', (err) => console.error('[db] pool error:', err.message))
 
 const db = { query: (text, params) => pool.query(text, params) }
 
+// Storage label derived from the REAL DATABASE_URL host — never hardcode it. A stale hardcoded
+// 'cockroachdb' (from the pre-2026-06-28 CRDB era) survived the Supabase migration and triggered a
+// false "CRDB RU limit" investigation on 2026-07-01. Single source of truth = the connection host.
+const STORAGE_KIND = /supabase/i.test(_dbUrl.host) ? 'supabase'
+  : /cockroachlabs|crdb|cockroach/i.test(_dbUrl.host) ? 'cockroachdb'
+  : /neon/i.test(_dbUrl.host) ? 'neon' : 'postgres'
+
 async function initDb() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS projects (
@@ -1221,7 +1228,7 @@ app.get('/api/status', async (req, res) => {
       const coolingDown = !!(coolUntil && ts < coolUntil)
       return { name: p.name, configured: !!p.key, model: p.model, coolingDown, cooldownUntil: coolingDown ? new Date(coolUntil).toISOString() : null }
     }),
-    storage: 'cockroachdb',
+    storage: STORAGE_KIND,
     projects: projectCount,
     tasks: taskCount,
     lastDigestAt: _lastDigestAt,
@@ -1252,7 +1259,7 @@ const RENDER_SERVICES = [
   { name: '2560戰法 (Worker)',     host: 'two560-app.atungc2020.workers.dev',    path: '/__up',   workspace: 'atungc2020', cf: true },  // CF Worker edge-only 健康檢查(不喚醒後端 two560-app-2)；後端停權狀態由 atungc2020 Render API key 覆蓋。2026-06-19 從 schienbiz two560-app.onrender.com 遷移(舊的已停權，且 HTTP poll 它=keepalive)
   { name: 'Travel Advisor',       host: 'travel-advisor-wwrz.onrender.com',     path: '/',       workspace: 'schienbiz'   },
   { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/',       workspace: 'schienbiz'   },
-  { name: 'Private Network',      host: 'private-network-49yk.onrender.com',    path: '/',       workspace: 'atungc2020'  },
+  { name: 'Private Network',      host: 'private-network-jahr.onrender.com',    path: '/',       workspace: 'pvnetwork2026' },  // 2026-07-02 遷 atungc2020→pvnetwork2026 隔離 WS 池；舊 private-network-49yk 已 suspend 待刪
   { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/',       workspace: 'schienbiz'   },  // verified via Render API 2026-06-19 (was mis-tagged smritichain)
   { name: 'Voice Trainer',        host: 'voice-trainer.onrender.com',           path: '/health', workspace: 'smritichain' },
   { name: 'Self-Journal',         host: 'self-journal.onrender.com',            path: '/health', workspace: 'atungc2020'  },
@@ -1324,7 +1331,13 @@ function usageLevel(pctFraction) {
 function renderUsageSummary() {
   const cap = _renderUsageConfig.capHours
   const ws = {}
-  for (const svc of RENDER_SERVICES) {
+  // Prefer the authoritative Render API fleet — covers ALL services incl. those absent from the
+  // health-probe list (e.g. line-expense-bot, which ran 24/7 and blew smritichain's pool while
+  // the probe-based gauge counted it as 0). Fall back to the probe list before the first API poll.
+  const fleet = _renderApiState.services.length
+    ? _renderApiState.services.map(s => ({ name: s.name, workspace: s.workspace }))
+    : RENDER_SERVICES
+  for (const svc of fleet) {
     const w = svc.workspace
     if (!ws[w]) ws[w] = { name: w, capHours: cap, services: [], totalHours: 0 }
     const hours = (_renderUsage.awakeSeconds[svc.name] || 0) / 3600
@@ -1357,15 +1370,12 @@ function tickRenderUsage(results) {
     _lastUsageTickAt = null
     console.log(`[render-usage] new month ${month} — counters reset`)
   }
-  // elapsed since last tick, clamped so a missed/slow cycle can't inflate the count
-  const deltaSec = _lastUsageTickAt ? Math.min(Math.max((now - _lastUsageTickAt) / 1000, 0), 120) : 0
-  _lastUsageTickAt = now
-  if (deltaSec > 0) {
-    for (const svc of results) {
-      if (svc.healthy && !svc.cf) _renderUsage.awakeSeconds[svc.name] = (_renderUsage.awakeSeconds[svc.name] || 0) + deltaSec  // cf=CF Worker edge check，不消耗 Render 池時數，排除避免污染用量估算
-    }
-  }
-
+  // Awake-hours are now accumulated authoritatively from the Render metrics API (cpu-datapoint
+  // density) in tickRenderUsageFromMetrics() — 24/7, zero keepalive, whole fleet. The old
+  // dashboard-probe accumulation here was a severe undercount (probes only run while the admin UI
+  // is open) and ignored services not in the probe list, so smritichain hit 106% (line-expense-bot
+  // 730h) with zero alert. This path is kept only for month-rollover + threshold responsiveness.
+  void now; void results
   checkUsageThresholds()
   saveRenderUsage()
 }
@@ -1385,6 +1395,48 @@ function checkUsageThresholds() {
     }
     _renderUsage.alerted[w.name] = fired
   }
+}
+
+// Authoritative awake-hours accumulator. Uses the Render metrics API `cpu` series — datapoints
+// exist ONLY while an instance is running, so their count × 60s = real awake-time. Runs on the
+// safe 24/7 refreshRenderState() timer (hits api.render.com, never the service = zero keepalive),
+// covers the whole fleet, and drives the existing 70/85/95% pool-usage Telegram alert with real
+// numbers. Best-effort per service; small metric-lag undercount is acceptable for a threshold gauge.
+let _lastMetricsUsageAt = null
+async function tickRenderUsageFromMetrics(fleet, idKey) {
+  const now = Date.now()
+  const month = taipeiMonth()
+  if (_renderUsage.month !== month) {
+    _renderUsage = { month, awakeSeconds: {}, alerted: {} }
+    _lastMetricsUsageAt = null
+    console.log(`[render-usage] new month ${month} — counters reset`)
+  }
+  const since = _lastMetricsUsageAt || (now - 5 * 60_000)      // first run: look back one interval
+  const startISO = new Date(since - 60_000).toISOString()      // 60s buffer for metric ingest lag
+  const endISO = new Date(now).toISOString()
+  await Promise.all(fleet.filter(r => r.id && r.suspended !== 'suspended').map(async (rec) => {
+    const key = idKey[rec.id]
+    if (!key) return
+    try {
+      const r = await Promise.race([
+        fetch(`https://api.render.com/v1/metrics/cpu?resource=${rec.id}&startTime=${encodeURIComponent(startISO)}&endTime=${encodeURIComponent(endISO)}`,
+          { headers: { Authorization: `Bearer ${key}` } }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+      ])
+      if (!r.ok) return
+      const series = await r.json()
+      const fresh = new Set()
+      for (const s of (Array.isArray(series) ? series : [])) {
+        for (const v of (s.values || [])) {
+          if (new Date(v.timestamp).getTime() > since) fresh.add(v.timestamp)   // only new points → no double-count
+        }
+      }
+      if (fresh.size) _renderUsage.awakeSeconds[rec.name] = (_renderUsage.awakeSeconds[rec.name] || 0) + fresh.size * 60
+    } catch { /* per-service best-effort */ }
+  }))
+  _lastMetricsUsageAt = now
+  checkUsageThresholds()
+  saveRenderUsage()
 }
 
 // In-memory cache — admin status returns this instantly instead of blocking on HTTP polls
@@ -1449,9 +1501,10 @@ function maybeRefreshRenderCache() {
 // the workspace's free 750h pool is exhausted. (Render's API exposes no consumed-hours
 // figure, so this state is what catches a pool blow-out — not an hours number.)
 const RENDER_API_KEYS = {
-  schienbiz:   process.env.RENDER_API_KEY_SCHIENBIZ,
-  smritichain: process.env.RENDER_API_KEY_SMRITICHAIN,
-  atungc2020:  process.env.RENDER_API_KEY_ATUNGC2020,
+  schienbiz:    process.env.RENDER_API_KEY_SCHIENBIZ,
+  smritichain:  process.env.RENDER_API_KEY_SMRITICHAIN,
+  atungc2020:   process.env.RENDER_API_KEY_ATUNGC2020,
+  pvnetwork2026: process.env.RENDER_API_KEY_PVNETWORK2026,  // 2026-07-02 private-network 遷入獨立帳號隔離常駐 WS 消耗；key 缺時 refreshRenderState 的 if(!key) continue 會優雅跳過，補上 .env 即自動啟用 suspend/deploy/usage 監控（否則此帳號=監控盲點）
 }
 let _renderApiState = { byHost: {}, services: [], checkedAt: null, errors: [] }
 const _renderSuspendState = {}   // host → last seen 'suspended'|'not_suspended' (for transition alerts)
@@ -1470,7 +1523,7 @@ async function refreshRenderState() {
       for (const it of await r.json()) {
         const s = it.service || it
         const host = (s.serviceDetails?.url || '').replace(/^https?:\/\//, '')
-        const rec = { name: s.name, host, workspace: ws, id: s.id, suspended: s.suspended, suspenders: s.suspenders || [] }
+        const rec = { name: s.name, host, workspace: ws, id: s.id, suspended: s.suspended, suspenders: s.suspenders || [], repo: s.repo || null, branch: s.branch || 'main' }
         if (s.id) idKey[s.id] = key
         if (host) byHost[host] = rec
         all.push(rec)
@@ -1507,8 +1560,10 @@ async function refreshRenderState() {
       ])
       if (!r.ok) return
       const arr = await r.json()
-      const status = ((arr[0] && (arr[0].deploy || arr[0])) || {}).status || ''
+      const dep = (arr[0] && (arr[0].deploy || arr[0])) || {}
+      const status = dep.status || ''
       rec.deployStatus = status
+      rec.deployedCommit = dep.commit?.id || null
       const prev = _renderDeployState[rec.host]
       _renderDeployState[rec.host] = status
       if (prev && prev !== status && BAD_DEPLOY.test(status) && !BAD_DEPLOY.test(prev)) {
@@ -1518,6 +1573,9 @@ async function refreshRenderState() {
     } catch { /* deploy 查詢 best-effort */ }
   }))
   _renderApiState = { byHost, services: all, checkedAt: new Date().toISOString(), errors }
+  // Accumulate REAL awake-hours + fire pool-usage alerts from authoritative metrics (best-effort;
+  // must never break state refresh). This is what would have caught line-expense-bot at 70%.
+  await tickRenderUsageFromMetrics(all, idKey).catch(e => console.error('[render-usage] metrics tick error:', e.message))
   const susp = all.filter(s => s.suspended === 'suspended').length
   console.log(`[render-api] state refreshed — ${susp}/${all.length} suspended${errors.length ? ` (errors: ${errors.join(' ')})` : ''}`)
 }
@@ -1529,6 +1587,13 @@ if (Object.values(RENDER_API_KEYS).some(Boolean)) {
 } else {
   console.warn('[render-api] no RENDER_API_KEY_* set — authoritative suspension state disabled')
 }
+
+// Commit-drift ALERTING moved out (2026-07-01) → `~/commit-drift-scan.py` LaunchAgent on ATung Mac.
+// Rationale: full coverage needs per-org GitHub tokens for cross-org PRIVATE repos, and embedding
+// write-scoped PATs into this internet-exposed service is a poor security trade. The local scanner
+// reads the gh keyring's 3 org tokens at runtime (never persisted, never on the exposed host) and
+// covers all 10 services. Keeping an in-process checker here too would double-alert on public repos.
+// (rec.deployedCommit is still captured in the deploy-status loop above for the dashboard.)
 
 // ── API Key Vault ─────────────────────────────────────────────────────────────
 const VAULT_PATH = path.join(__dirname, '../data/vault.json')
@@ -1978,7 +2043,7 @@ app.get('/api/admin/status', requireAdmin, async (req, res) => {
     })() },
     syncthing,
     digest: { lastDigestAt: _lastDigestAt },
-    storage: 'cockroachdb',
+    storage: STORAGE_KIND,
     checkedAt: new Date().toISOString(),
   })
 })

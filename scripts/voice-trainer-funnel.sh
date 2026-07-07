@@ -49,7 +49,7 @@ log "cloudflared started (PID=$CFPID)"
 URL=""
 for i in $(seq 1 40); do
   sleep 0.5
-  URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1)
+  URL=$(grep -aoE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1)
   [ -n "$URL" ] && break
 done
 
