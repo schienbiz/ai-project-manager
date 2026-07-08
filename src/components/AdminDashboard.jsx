@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, streamAgent, adminAuth } from '../api.js'
+import AdminHelp from './AdminHelp.jsx'
 
 const PROJECT_ORDER = [
   'AI PM', '2560戰法', 'Marketing', 'AI Learning', 'Voice Trainer',
@@ -261,6 +262,7 @@ export default function AdminDashboard({ onBack }) {
   const [vaultProject, setVaultProject]   = useState('All')
   const [vaultCollapsed, setVaultCollapsed] = useState({})
   const [projects, setProjects]           = useState([])
+  const [showHelp, setShowHelp]           = useState(false)
   const toggleSection = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
   const handleAuthError = useCallback((err) => {
@@ -531,10 +533,13 @@ export default function AdminDashboard({ onBack }) {
             {lastRefresh ? `updated ${elapsed(lastRefresh.toISOString())}` : ''} · auto-refresh 10s
           </span>
           <button className="btn btn-sm btn-ai" onClick={refresh} title="Refresh (R)">↺ Refresh</button>
+          <button className="btn btn-sm" onClick={() => setShowHelp(h => !h)} title="使用說明">{showHelp ? '✕ 說明' : '❓ 說明'}</button>
           <span className="admin-shortcut-hint"><kbd>R</kbd> to refresh</span>
         </div>
         {data && <HealthStrip data={data} />}
       </div>
+
+      {showHelp && <AdminHelp onClose={() => setShowHelp(false)} />}
 
       {loading && <div className="admin-loading">Checking services…</div>}
       {error   && <div className="admin-error">⚠️ {error}</div>}
