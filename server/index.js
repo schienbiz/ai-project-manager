@@ -2082,6 +2082,45 @@ const OPTIMIZABLE_SERVICES = [
   { name: 'AI PM',            file: `${homedir()}/CloudSync/ai-project-manager/server/index.js`,   label: 'com.ai-project-manager.dev',  selfRestart: true  },
 ]
 
+// ── Live model-inventory scan (取代硬編「2026-06 已知」快照 → 消除漂移根因) ──────
+// agent-analysis 的各專案 model 盤點改由 runtime grep 實際原始碼衍生。只能看到「本機
+// 存在的專案原始碼」；不在本機者誠實標 remote-only，不硬編、不謊報（見審視落差第九根因）。
+const PROJECT_SOURCES = [
+  { name: 'Relationship OS',      dirs: ['relationship-os'] },
+  { name: 'Intelligence Journal', dirs: ['intelligence-journal', 'CloudSync/intelligence-journal'] },
+  { name: 'Voice Trainer',        dirs: ['CloudSync/voice-trainer', 'voice-trainer'] },
+  { name: 'AI Learning Tool',     dirs: ['CloudSync/ai-learning-tool', 'ai-learning-tool'] },
+  { name: 'AI PM',                dirs: ['CloudSync/ai-project-manager'] },
+  { name: 'Marketing (proxy)',    dirs: ['CloudSync/marketing-assistant', 'marketing-assistant'] },
+  { name: '2560戰法',             dirs: ['2560-app', 'CloudSync/2560-app'] },
+  { name: 'Travel Advisor',       dirs: ['travel-advisor', 'CloudSync/travel-advisor'] },
+  { name: 'Warehouse Scanner',    dirs: ['warehouse-scanner', 'CloudSync/warehouse-scanner'] },
+  { name: 'Self Journal',         dirs: ['self-journal', 'CloudSync/self-journal'] },
+  { name: 'Private Network',      dirs: ['private-network', 'CloudSync/private-network'] },
+  { name: 'Line Expense Bot',     dirs: ['line-expense-bot', 'CloudSync/line-expense-bot'] },
+]
+const MODEL_TOKEN_RE = 'llama|qwen|gpt-oss|mixtral|gemma|deepseek|mistral|nemotron|kimi|scout|maverick|command-r'
+function scanProjectModels() {
+  const home = homedir()
+  return PROJECT_SOURCES.map(p => {
+    const dir = p.dirs.map(d => `${home}/${d}`).find(d => fs.existsSync(d))
+    if (!dir) return { name: p.name, models: null, note: 'source 不在本機（remote-only，未掃描）' }
+    try {
+      const out = execSync(
+        `grep -rhoE "[a-zA-Z0-9._/-]*(${MODEL_TOKEN_RE})[a-zA-Z0-9._/-]*" ` +
+        `"${dir}" --include="*.js" --include="*.ts" --exclude-dir=node_modules --exclude-dir=.git ` +
+        // 只保留真 model-ID 形狀（含 '/'、'NNb' 版本、或 '-latest'），濾掉變數名/子字串誤中（Ollama含llama、nemotron.error 等）
+        `2>/dev/null | grep -E '/|latest|[0-9]+b' | sort -u | head -40`,
+        { timeout: 8000, encoding: 'utf-8', shell: '/bin/bash', maxBuffer: 1 << 20 }
+      ).trim()
+      const models = out ? [...new Set(out.split('\n').filter(Boolean))] : []
+      return { name: p.name, models, note: models.length ? '' : '掃描到 0 個 model token（可能非 AI 專案）' }
+    } catch (e) {
+      return { name: p.name, models: null, note: `掃描失敗：${e.message.split('\n')[0]}` }
+    }
+  })
+}
+
 // Preview endpoint — returns parsed actions as JSON without applying anything
 app.post('/api/admin/agent-optimize/preview', requireAdmin, async (req, res) => {
   try {
@@ -2259,6 +2298,13 @@ app.post('/api/admin/agent-analysis', requireAdmin, async (req, res) => {
       ? `\n即將到期的 Key (30天內):\n${expiringKeys.map(e => `• ${e.name} — ${daysUntil(e.expiry) < 0 ? '已過期' : `${daysUntil(e.expiry)}天後`}`).join('\n')}`
       : '\n無即將到期的 Key。'
 
+    const modelScan = scanProjectModels()
+    const projectModelLines = modelScan.map(p => {
+      if (p.models === null) return `• **${p.name}**: ⚠️ ${p.note}`
+      if (!p.models.length)  return `• **${p.name}**: 無 AI model 呼叫（${p.note}）`
+      return `• **${p.name}**: ${p.models.join(', ')}`
+    }).join('\n')
+
     const prompt = `你是 AI 工程顧問，負責審查以下多專案 AI agent 架構，判斷是否需要更新。
 
 ## 當前 AI PM 配置的 Provider（本機 chusMBp）
@@ -2268,16 +2314,10 @@ ${providerLines}
 ${vaultSummary}
 ${expiryWarning}
 
-## 各專案 AI Agent 現況（2026-06 已知）
-• **Relationship OS (ROS)**: Groq Qwen3-32b (Blindspot 分析)
-• **Intelligence Journal**: Groq Llama4-Scout → Cerebras gpt-oss-120b → NVIDIA Llama3.3-70b → Mistral-large (週報分析，串流)
-• **Voice Trainer**: Groq + Cerebras + NVIDIA + Mistral + OpenRouter (5 providers，語音教練)
-• **AI Learning Tool**: Groq Scout4 + Qwen3 + Cerebras gather；OpenRouter Llama4-Maverick fallback
-• **AI PM**: Groq Scout + Cerebras + Qwen3 + NVIDIA + Mistral (5 providers，PM agents + digest)
-• **Marketing Assistant**: Mistral 為主，另有備援
-• **2560戰法**: 無 AI agent（純市場訊號）
-• **Travel Advisor**: gather-synthesis 架構，多 provider race
-• **Private Network**: 無 AI agent
+## 各專案 AI Agent 現況（本機 runtime grep 實際原始碼所得，${new Date().toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' })}，非硬編快照）
+${projectModelLines}
+
+> 註：標「source 不在本機」者原始碼在 ATung Mac，本機無法掃描，**請勿據此斷言其模型是否過期**；其餘為 grep 實碼所得的當前 model ID。
 
 ## 分析任務
 請依以下結構，給出具體建議：
