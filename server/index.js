@@ -1484,10 +1484,37 @@ async function refreshRenderCache() {
 // pool and suspended 2560 / travel / intelligence-journal (2026-06-19). Can-sleep apps
 // should be allowed to sleep; we only probe them when a human is actually watching.
 let _renderRefreshInFlight = false
+
+// 無互動衰減（2026-07-10，燒池第五次重演的 server 側防線）：「dashboard 開著」≠「人在看」。
+// 遺忘的分頁（即使被前端 visibility 閘漏掉，例如可見但沒人碰、或舊版 client）會以
+// 10s/節流後 1min 的節奏連續打本端點，60s throttle 對 Render 15min spindown 而言仍是
+// 24/7 keepalive（實測 schienbiz 48h awake 78%）。判準改為「輪詢中斷後恢復 = 有人剛
+// 回來看」：中斷 >ATTENTION_GAP_MS 後的第一個請求算互動；連續無中斷輪詢超過
+// ATTENDED_WINDOW_MS → probe throttle 升到 IDLE_THROTTLE_MS（>15min，讓 can-sleep
+// 服務真的能睡）。手動 force-refresh 永遠重置。防禦放 server 側 = 不依賴每個 client 行為正確。
+const ATTENTION_GAP_MS   = 2 * 60_000    // 輪詢中斷多久後恢復才算「人回來了」
+const ATTENDED_WINDOW_MS = 30 * 60_000   // 互動後全速 probe 的窗口
+const IDLE_THROTTLE_MS   = 20 * 60_000   // 衰減後的 probe 間隔（> Render 15min spindown）
+let _renderAttentionAt = 0
+let _lastStatusPollAt = 0
+let _probeDecayLogged = false
+function markRenderAttention() { _renderAttentionAt = Date.now(); _probeDecayLogged = false }
+function noteStatusPoll() {
+  const now = Date.now()
+  if (now - _lastStatusPollAt > ATTENTION_GAP_MS) markRenderAttention()
+  _lastStatusPollAt = now
+}
 function maybeRefreshRenderCache() {
   if (_renderRefreshInFlight) return
-  const ageMs = _renderCache.checkedAt ? Date.now() - new Date(_renderCache.checkedAt) : Infinity
-  if (ageMs < 60_000) return            // throttle: at most one upstream poll per 60s
+  const now = Date.now()
+  const idle = now - _renderAttentionAt > ATTENDED_WINDOW_MS
+  if (idle && !_probeDecayLogged) {
+    _probeDecayLogged = true
+    console.log('[render] probe decay engaged — 30min 無互動，throttle 60s→20min（fleet 可入睡）')
+  }
+  const throttle = idle ? IDLE_THROTTLE_MS : 60_000
+  const ageMs = _renderCache.checkedAt ? now - new Date(_renderCache.checkedAt) : Infinity
+  if (ageMs < throttle) return
   _renderRefreshInFlight = true
   refreshRenderCache()
     .catch(e => console.error('[render] refresh error:', e.message))
@@ -1695,6 +1722,7 @@ app.get('/api/admin/vault/:name/reveal', requireAdmin, (req, res) => {
 })
 
 app.post('/api/admin/render/refresh', requireAdmin, (req, res) => {
+  markRenderAttention()   // 手動 refresh = 明確的人為互動，重置 probe 衰減
   refreshRenderCache().catch(e => console.error('[render] force-refresh error:', e.message))
   res.json({ ok: true })
 })
@@ -1957,8 +1985,9 @@ app.post('/api/admin/cloudinary/refresh', requireAdmin, (req, res) => {
 
 app.get('/api/admin/status', requireAdmin, async (req, res) => {
   // Dashboard is open (this endpoint is only polled by AdminDashboard) → kick a lazy,
-  // non-blocking render-health refresh. Self-throttled to ≤1 upstream poll/60s and skipped
-  // entirely when nobody is watching, so it never becomes a 24/7 keepalive (see maybeRefreshRenderCache).
+  // non-blocking render-health refresh. Self-throttled to ≤1 upstream poll/60s，且
+  // 連續無中斷輪詢 30min 後衰減到 20min（遺忘分頁≠有人在看，see maybeRefreshRenderCache）。
+  noteStatusPoll()
   maybeRefreshRenderCache()
 
   // Local services: fast localhost polls (≤4s timeout, run in parallel)
@@ -2027,6 +2056,8 @@ app.get('/api/admin/status', requireAdmin, async (req, res) => {
       return api ? { ...s, suspended: api.suspended, suspenders: api.suspenders } : s
     }),
     renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,
+    // probe 衰減觀測：attended=互動後窗口內全速(60s)；idle=已衰減(20min，fleet 可入睡)
+    renderProbeMode: (Date.now() - _renderAttentionAt > ATTENDED_WINDOW_MS) ? 'idle' : 'attended',
     // Authoritative state for the whole fleet (includes services not in the probe list, e.g. line-expense-bot).
     renderApi: { checkedAt: _renderApiState.checkedAt, services: _renderApiState.services, errors: _renderApiState.errors },
     renderUsage: { month: _renderUsage.month, capHours: _renderUsageConfig.capHours, config: usageConfigPublic(), workspaces: renderUsageSummary() },

@@ -317,8 +317,24 @@ export default function AdminDashboard({ onBack }) {
     refresh()
     loadVault()
     loadProjects()
-    const id = setInterval(refresh, 10_000)
-    return () => clearInterval(id)
+    // 遺忘分頁防護（2026-07-10）：背景分頁的輪詢是整個 free fleet 的 keepalive——
+    // Chrome 節流後仍 ~1/min ≥ server 60s throttle，被 probe 的後端永遠差 14 分鐘
+    // 睡不著（實測 schienbiz 48h awake 78%，燒池第五次重演）。隱藏即停輪詢，
+    // 回前景補一次再續。server 側另有無互動衰減擋「可見但被遺忘」的分頁。
+    let id = document.hidden ? null : setInterval(refresh, 10_000)
+    const onVis = () => {
+      if (document.hidden) {
+        if (id != null) { clearInterval(id); id = null }
+      } else if (id == null) {
+        refresh()
+        id = setInterval(refresh, 10_000)
+      }
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      if (id != null) clearInterval(id)
+      document.removeEventListener('visibilitychange', onVis)
+    }
   }, [refresh, loadVault, loadProjects])
 
   useEffect(() => {

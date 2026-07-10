@@ -24,8 +24,8 @@ const LEGEND = [
 ]
 
 const CADENCE = [
-  ['本頁整體', '每 10s(或按 R)'],
-  ['Render 探測', '≤1 次/60s · ↺ Now'],
+  ['本頁整體', '每 10s(隱藏分頁暫停;或按 R)'],
+  ['Render 探測', '≤1 次/60s · 30min 無互動衰減至 20min · ↺ Now'],
   ['Render 權威狀態', '每 5 分鐘'],
   ['DB 用量', '每 6 小時 · ↺ Now'],
   ['Cloudinary', '每 1 小時 · ↺ Now'],
