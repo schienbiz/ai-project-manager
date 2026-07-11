@@ -44,6 +44,12 @@ should_notify() {
 if [ -n "$PORT" ]; then
   echo "[bore-ssh] $(date): tunnel active at bore.pub:$PORT"
   echo "$PORT" > /tmp/bore-ssh-current.txt
+  # Publish to the Syncthing-synced data dir so ATung's watchdog can read this port
+  # transport-independently: bore is the OUT-OF-BAND liveness signal now that the ngrok
+  # HTTP tunnel is retired (2026-07-11). During a Tailscale outage ATung still has the
+  # last-synced port on local disk and probes bore.pub:$PORT directly (public internet).
+  SYNCED_DIR="$HOME/CloudSync/ai-project-manager/data"
+  [ -d "$SYNCED_DIR" ] && echo "$PORT" > "$SYNCED_DIR/bore-ssh-current.txt"
   if should_notify; then
     date +%s > "$COOLDOWN_FILE"
     tg "🔑 *chusMBp SSH Fallback (bore)*
