@@ -1444,77 +1444,77 @@ let _renderCache = { services: [], checkedAt: null }
 // State map for alert deduplication (only alert on healthy→unhealthy transitions)
 const _renderHealthState = {}
 
+// Backend health derived from the AUTHORITATIVE Render API state (refreshRenderState, which hits
+// api.render.com — never the service, zero keepalive). A backend is "healthy" when its workspace
+// isn't suspended and its last deploy isn't failed/canceled. This REPLACES the old backend /health
+// curl: that HTTP probe reset Render's 15-min spindown clock every poll and kept the whole fleet
+// awake (燒池, 6/19 + 第五次重演 7/10). Deriving from API state removes the wake vector entirely.
+const BAD_DEPLOY_RE = /failed|canceled/i
+function backendHealthFromApi(svc) {
+  const api = _renderApiState.byHost[svc.host]
+  if (!api) return { ...svc, status: 0, latency: 0, healthy: false, probe: 'api', note: 'no-api-state' }
+  const suspended = api.suspended === 'suspended'
+  const badDeploy = BAD_DEPLOY_RE.test(api.deployStatus || '')
+  const healthy = !suspended && !badDeploy
+  return {
+    ...svc, probe: 'api', latency: 0, healthy,
+    status: healthy ? 200 : (suspended ? 503 : 500),
+    suspended: api.suspended, suspenders: api.suspenders, deployStatus: api.deployStatus || null,
+  }
+}
+
 async function refreshRenderCache() {
   const results = await Promise.all(RENDER_SERVICES.map(async (svc) => {
+    // Backend services (.onrender.com): NEVER HTTP-probe — that curl is the keepalive that wakes a
+    // free service. Health comes from the Render API state (refreshed 24/7, api.render.com only).
+    if (!svc.cf) return backendHealthFromApi(svc)
+    // Edge endpoints (CF Worker /__up): safe to probe — hits Cloudflare, not the sleeping backend.
     const t0 = Date.now()
     try {
       const r = await Promise.race([
         fetch(`https://${svc.host}${svc.path}`),
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
       ])
-      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 400 }
+      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 400, probe: 'edge' }
     } catch {
-      return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
+      return { ...svc, status: 0, latency: Date.now() - t0, healthy: false, probe: 'edge' }
     }
   }))
 
-  // Alert on state transitions
+  // Transition alerts: EDGE services only. Backend suspend + deploy-failure transitions are owned
+  // authoritatively by refreshRenderState() (via the Render API) — alerting here too = double-fire.
   for (const svc of results) {
+    if (svc.probe !== 'edge') continue
     const wasHealthy = _renderHealthState[svc.name]
     _renderHealthState[svc.name] = svc.healthy
     if (wasHealthy === true && !svc.healthy) {
-      sendTelegram(`🔴 *Render 服務異常*\n\n*${svc.name}* 無法回應\nHost: \`${svc.host}\`\nStatus: ${svc.status}`).catch(() => {})
-      console.warn(`[render] ${svc.name} DOWN`)
+      sendTelegram(`🔴 *Render edge 異常*\n\n*${svc.name}* 邊緣端無法回應\nHost: \`${svc.host}\`\nStatus: ${svc.status}`).catch(() => {})
+      console.warn(`[render] ${svc.name} (edge) DOWN`)
     } else if (wasHealthy === false && svc.healthy) {
-      sendTelegram(`🟢 *Render 服務恢復*\n\n*${svc.name}* 已恢復正常`).catch(() => {})
-      console.log(`[render] ${svc.name} recovered`)
+      sendTelegram(`🟢 *Render edge 恢復*\n\n*${svc.name}* 邊緣端已恢復正常`).catch(() => {})
+      console.log(`[render] ${svc.name} (edge) recovered`)
     }
   }
 
   tickRenderUsage(results)
 
   _renderCache = { services: results, checkedAt: new Date().toISOString() }
-  console.log(`[render] cache refreshed — ${results.filter(s => s.healthy).length}/${results.length} healthy`)
+  console.log(`[render] cache refreshed (edge-only) — ${results.filter(s => s.healthy).length}/${results.length} healthy`)
 }
 
-// Render health is refreshed ON DEMAND from the /api/admin/status handler (i.e. only
-// while someone has the admin dashboard open), NOT on a background timer. A fixed-interval
-// poll hits every free service every cycle, which resets Render's 15-min spindown clock and
-// keeps the whole fleet awake 24/7 — that silently exhausted the schienbiz 750h workspace
-// pool and suspended 2560 / travel / intelligence-journal (2026-06-19). Can-sleep apps
-// should be allowed to sleep; we only probe them when a human is actually watching.
+// Render health cache is assembled ON DEMAND from the /api/admin/status handler (while the admin
+// dashboard is open). It is now KEEPALIVE-FREE: backend health is derived from the Render API
+// state (refreshRenderState, 24/7 timer, api.render.com only) and the sole live HTTP probe is the
+// CF Worker /__up edge, which hits Cloudflare and never wakes a sleeping backend. So the whole
+// attention/decay machinery that used to gate backend curls (ATTENDED_WINDOW/IDLE_THROTTLE, added
+// 2026-07-10 for 燒池第五次重演) is obsolete — no backend is probed regardless of who's watching.
+// A flat throttle remains only to avoid spamming the CF edge on a fast dashboard poll loop.
 let _renderRefreshInFlight = false
-
-// 無互動衰減（2026-07-10，燒池第五次重演的 server 側防線）：「dashboard 開著」≠「人在看」。
-// 遺忘的分頁（即使被前端 visibility 閘漏掉，例如可見但沒人碰、或舊版 client）會以
-// 10s/節流後 1min 的節奏連續打本端點，60s throttle 對 Render 15min spindown 而言仍是
-// 24/7 keepalive（實測 schienbiz 48h awake 78%）。判準改為「輪詢中斷後恢復 = 有人剛
-// 回來看」：中斷 >ATTENTION_GAP_MS 後的第一個請求算互動；連續無中斷輪詢超過
-// ATTENDED_WINDOW_MS → probe throttle 升到 IDLE_THROTTLE_MS（>15min，讓 can-sleep
-// 服務真的能睡）。手動 force-refresh 永遠重置。防禦放 server 側 = 不依賴每個 client 行為正確。
-const ATTENTION_GAP_MS   = 2 * 60_000    // 輪詢中斷多久後恢復才算「人回來了」
-const ATTENDED_WINDOW_MS = 30 * 60_000   // 互動後全速 probe 的窗口
-const IDLE_THROTTLE_MS   = 20 * 60_000   // 衰減後的 probe 間隔（> Render 15min spindown）
-let _renderAttentionAt = 0
-let _lastStatusPollAt = 0
-let _probeDecayLogged = false
-function markRenderAttention() { _renderAttentionAt = Date.now(); _probeDecayLogged = false }
-function noteStatusPoll() {
-  const now = Date.now()
-  if (now - _lastStatusPollAt > ATTENTION_GAP_MS) markRenderAttention()
-  _lastStatusPollAt = now
-}
+const RENDER_CACHE_THROTTLE_MS = 60_000   // edge probe + API-derived assembly; keepalive-free
 function maybeRefreshRenderCache() {
   if (_renderRefreshInFlight) return
-  const now = Date.now()
-  const idle = now - _renderAttentionAt > ATTENDED_WINDOW_MS
-  if (idle && !_probeDecayLogged) {
-    _probeDecayLogged = true
-    console.log('[render] probe decay engaged — 30min 無互動，throttle 60s→20min（fleet 可入睡）')
-  }
-  const throttle = idle ? IDLE_THROTTLE_MS : 60_000
-  const ageMs = _renderCache.checkedAt ? now - new Date(_renderCache.checkedAt) : Infinity
-  if (ageMs < throttle) return
+  const ageMs = _renderCache.checkedAt ? Date.now() - new Date(_renderCache.checkedAt) : Infinity
+  if (ageMs < RENDER_CACHE_THROTTLE_MS) return
   _renderRefreshInFlight = true
   refreshRenderCache()
     .catch(e => console.error('[render] refresh error:', e.message))
@@ -1722,7 +1722,7 @@ app.get('/api/admin/vault/:name/reveal', requireAdmin, (req, res) => {
 })
 
 app.post('/api/admin/render/refresh', requireAdmin, (req, res) => {
-  markRenderAttention()   // 手動 refresh = 明確的人為互動，重置 probe 衰減
+  // Keepalive-free: refreshRenderCache no longer curls backends (edge-only + API-derived).
   refreshRenderCache().catch(e => console.error('[render] force-refresh error:', e.message))
   res.json({ ok: true })
 })
@@ -1985,9 +1985,8 @@ app.post('/api/admin/cloudinary/refresh', requireAdmin, (req, res) => {
 
 app.get('/api/admin/status', requireAdmin, async (req, res) => {
   // Dashboard is open (this endpoint is only polled by AdminDashboard) → kick a lazy,
-  // non-blocking render-health refresh. Self-throttled to ≤1 upstream poll/60s，且
-  // 連續無中斷輪詢 30min 後衰減到 20min（遺忘分頁≠有人在看，see maybeRefreshRenderCache）。
-  noteStatusPoll()
+  // non-blocking render-health refresh. Keepalive-free (edge-only + API-derived), so a forgotten
+  // tab can no longer wake the fleet; the flat 60s throttle just avoids spamming the CF edge.
   maybeRefreshRenderCache()
 
   // Local services: fast localhost polls (≤4s timeout, run in parallel)
@@ -2056,8 +2055,8 @@ app.get('/api/admin/status', requireAdmin, async (req, res) => {
       return api ? { ...s, suspended: api.suspended, suspenders: api.suspenders } : s
     }),
     renderCacheAge: _renderCache.checkedAt ? Math.floor((ts - new Date(_renderCache.checkedAt)) / 1000) : null,
-    // probe 衰減觀測：attended=互動後窗口內全速(60s)；idle=已衰減(20min，fleet 可入睡)
-    renderProbeMode: (Date.now() - _renderAttentionAt > ATTENDED_WINDOW_MS) ? 'idle' : 'attended',
+    // Backends are never HTTP-probed anymore — health is API-derived, only the CF edge is polled.
+    renderProbeMode: 'edge-only',
     // Authoritative state for the whole fleet (includes services not in the probe list, e.g. line-expense-bot).
     renderApi: { checkedAt: _renderApiState.checkedAt, services: _renderApiState.services, errors: _renderApiState.errors },
     renderUsage: { month: _renderUsage.month, capHours: _renderUsageConfig.capHours, config: usageConfigPublic(), workspaces: renderUsageSummary() },
@@ -2412,8 +2411,17 @@ app.post('/api/admin/audit', requireAdmin, async (req, res) => {
       }
     }))
 
-    step('🌐 Checking Render services (live)...')
+    step('🌐 Checking Render services (API state, no keepalive)...')
     const renderResults = await Promise.all(RENDER_SERVICES.map(async (svc) => {
+      // Backends: derive from Render API state — never curl them (that's the fleet keepalive).
+      if (!svc.cf) {
+        const rec = backendHealthFromApi(svc)
+        const detail = rec.healthy ? 'API: healthy'
+          : (rec.suspended === 'suspended' ? 'SUSPENDED' : (rec.deployStatus || 'no API state'))
+        step(`${rec.healthy ? '✅' : '❌'} ${svc.name} — ${detail}`)
+        return rec
+      }
+      // Edge (CF Worker /__up): safe to probe.
       const t0 = Date.now()
       try {
         const r = await Promise.race([
@@ -2422,12 +2430,12 @@ app.post('/api/admin/audit', requireAdmin, async (req, res) => {
         ])
         const latency = Date.now() - t0
         const healthy = r.status < 400
-        step(`${healthy ? '✅' : '❌'} ${svc.name} — ${r.status} (${latency}ms)`)
-        return { ...svc, healthy, latency, status: r.status }
+        step(`${healthy ? '✅' : '❌'} ${svc.name} (edge) — ${r.status} (${latency}ms)`)
+        return { ...svc, healthy, latency, status: r.status, probe: 'edge' }
       } catch {
         const latency = Date.now() - t0
-        step(`❌ ${svc.name} — timeout (${latency}ms)`)
-        return { ...svc, healthy: false, latency, status: 0 }
+        step(`❌ ${svc.name} (edge) — timeout (${latency}ms)`)
+        return { ...svc, healthy: false, latency, status: 0, probe: 'edge' }
       }
     }))
 
