@@ -19,7 +19,7 @@ def api(path):
         headers={"Authorization": "Bearer " + KEY, "Accept": "application/json"})
     return json.load(urllib.request.urlopen(req, timeout=20))
 
-TARGETS = ["intelligence-journal", "travel-advisor", "leave-bot"]
+TARGETS = ["intelligence-journal", "leave-bot"]  # travel-advisor retired 2026-07-12 (suspended)
 svcs = {d["service"]["name"]: d["service"]["id"] for d in api("/v1/services?limit=50")
         if d["service"]["name"] in TARGETS}
 

@@ -1257,7 +1257,7 @@ const ATUNG_SERVICES = [
 // See hosting-decision-master-2026-06-17.md §3.
 const RENDER_SERVICES = [
   { name: '2560戰法 (Worker)',     host: 'two560-app.atungc2020.workers.dev',    path: '/__up',   workspace: 'atungc2020', cf: true },  // CF Worker edge-only 健康檢查(不喚醒後端 two560-app-2)；後端停權狀態由 atungc2020 Render API key 覆蓋。2026-06-19 從 schienbiz two560-app.onrender.com 遷移(舊的已停權，且 HTTP poll 它=keepalive)
-  { name: 'Travel Advisor',       host: 'travel-advisor-wwrz.onrender.com',     path: '/',       workspace: 'schienbiz'   },
+  // Travel Advisor 已停用(retired 2026-07-12,效果不佳)— Render srv-d84bdufaqgkc73ahgn40 suspended;移出探測名單以釋放 schienbiz 池
   { name: 'Intelligence Journal', host: 'intelligence-journal.onrender.com',    path: '/',       workspace: 'schienbiz'   },
   { name: 'Private Network',      host: 'private-network-jahr.onrender.com',    path: '/',       workspace: 'pvnetwork2026' },  // 2026-07-02 遷 atungc2020→pvnetwork2026 隔離 WS 池；舊 private-network-49yk 已 suspend 待刪
   { name: 'Leave Bot',            host: 'leave-bot-oh83.onrender.com',          path: '/',       workspace: 'schienbiz'   },  // verified via Render API 2026-06-19 (was mis-tagged smritichain)
@@ -2123,7 +2123,6 @@ const PROJECT_SOURCES = [
   { name: 'AI PM',                dirs: ['CloudSync/ai-project-manager'] },
   { name: 'Marketing (proxy)',    dirs: ['CloudSync/marketing-assistant', 'marketing-assistant'] },
   { name: '2560戰法',             dirs: ['2560-app', 'CloudSync/2560-app'] },
-  { name: 'Travel Advisor',       dirs: ['travel-advisor', 'CloudSync/travel-advisor'] },
   { name: 'Warehouse Scanner',    dirs: ['warehouse-scanner', 'CloudSync/warehouse-scanner'] },
   { name: 'Self Journal',         dirs: ['self-journal', 'CloudSync/self-journal'] },
   { name: 'Private Network',      dirs: ['private-network', 'CloudSync/private-network'] },
