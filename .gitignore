@@ -8,3 +8,6 @@ server/.syncthing.index.js.tmp
 .syncthing.*.tmp
 
 .env*
+
+# one-shot migration script (ran 2026-06-28, kept for reference, not source)
+migrate-aipm-to-supabase.mjs
