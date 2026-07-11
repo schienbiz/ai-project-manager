@@ -2121,7 +2121,7 @@ const PROJECT_SOURCES = [
   { name: 'Voice Trainer',        dirs: ['CloudSync/voice-trainer', 'voice-trainer'] },
   { name: 'AI Learning Tool',     dirs: ['CloudSync/ai-learning-tool', 'ai-learning-tool'] },
   { name: 'AI PM',                dirs: ['CloudSync/ai-project-manager'] },
-  { name: 'Marketing (proxy)',    dirs: ['CloudSync/marketing-assistant', 'marketing-assistant'] },
+  // Marketing (proxy) 已退役 2026-07-12 — 功能已合併進 AI-PM(/api/marketing/*,4d23240);standalone repo 已 archive;移出 drift 掃描
   { name: '2560戰法',             dirs: ['2560-app', 'CloudSync/2560-app'] },
   { name: 'Warehouse Scanner',    dirs: ['warehouse-scanner', 'CloudSync/warehouse-scanner'] },
   { name: 'Self Journal',         dirs: ['self-journal', 'CloudSync/self-journal'] },
