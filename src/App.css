@@ -635,3 +635,60 @@ body {
   .vault-input-date, .vault-input-proj { max-width: 100%; width: 100%; }
   .vault-search { font-size: 13px; padding: 8px 12px; }
 }
+
+/* ── Risk Register (Probability × Impact) ─────────────────────────────────── */
+.risk-drawer .ai-drawer-body { gap: 4px; }
+.risk-section-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.risk-matrix { display: grid; grid-template-columns: auto 1fr 1fr 1fr; gap: 4px; margin-bottom: 8px; }
+.rm-corner { font-size: 9px; color: var(--muted); line-height: 1.25; display: flex; flex-direction: column; justify-content: flex-end; padding: 2px; }
+.rm-head { font-size: 11px; font-weight: 600; color: var(--muted); display: flex; align-items: center; justify-content: center; }
+.rm-row-head { justify-content: flex-end; padding-inline-end: 6px; }
+.rm-col-head { padding-bottom: 2px; }
+.rm-cell { min-height: 34px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; border: 1px solid transparent; opacity: .55; }
+.rm-cell.has { opacity: 1; }
+.risk-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+.risk-legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.risk-legend-item i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* action colours */
+.act-mitigate    { background: rgba(248,81,73,.18);  color: #ff7b72; border-color: rgba(248,81,73,.4); }
+.act-fallback    { background: rgba(219,109,40,.20); color: #f0883e; border-color: rgba(219,109,40,.4); }
+.act-contingency { background: rgba(210,153,34,.20); color: #e3b341; border-color: rgba(210,153,34,.4); }
+.act-monitor     { background: rgba(63,185,80,.16);  color: #3fb950; border-color: rgba(63,185,80,.35); }
+.risk-legend-item i.act-mitigate    { background: #ff7b72; }
+.risk-legend-item i.act-fallback    { background: #f0883e; }
+.risk-legend-item i.act-contingency { background: #e3b341; }
+.risk-legend-item i.act-monitor     { background: #3fb950; }
+
+.risk-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.risk-add-form { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.risk-add-form textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 6px 8px; font-size: 13px; resize: vertical; margin-bottom: 6px; }
+.risk-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.risk-add-row label, .risk-row-controls label { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.risk-add-row select, .risk-row-controls select { background: var(--surface); border: 1px solid var(--border); border-radius: 5px; color: var(--text); font-size: 12px; padding: 3px 5px; }
+
+.risk-act-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; border: 1px solid transparent; white-space: nowrap; }
+.risk-act-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+
+.risk-proposals { background: var(--surface2); border: 1px dashed var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.risk-proposal-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--border); }
+.risk-proposal-item:first-of-type { border-top: none; }
+.risk-prop-desc { flex: 1; font-size: 12px; }
+.risk-prop-lvl { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+.risk-empty { padding: 12px; text-align: center; background: var(--surface2); border-radius: 8px; }
+.risk-list { display: flex; flex-direction: column; gap: 6px; }
+.risk-row { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.risk-row.closed { opacity: .5; }
+.risk-row-top { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.risk-desc { flex: 1; font-size: 13px; line-height: 1.35; }
+.risk-src { font-size: 9px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent-dim); border-radius: 4px; padding: 0 4px; align-self: center; }
+.risk-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 0 2px; }
+.risk-del:hover { color: var(--danger); }
+.risk-row-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.risk-owner { flex: 1; min-width: 80px; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; color: var(--text); font-size: 12px; padding: 3px 6px; }
+
+@media (max-width: 540px) {
+  .risk-row-controls { gap: 6px; }
+  .risk-owner { min-width: 60px; }
+}

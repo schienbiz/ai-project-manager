@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import AIPanel from './AIPanel.jsx'
+import RiskPanel from './RiskPanel.jsx'
 import AgentPanel from './AgentPanel.jsx'
 import TaskForm from './TaskForm.jsx'
 import { useLang } from '../i18n.js'
@@ -90,6 +91,7 @@ export default function ProjectDetail({
   const STATUS_LABEL = { active: t.statusActive, paused: t.statusPaused, completed: t.statusCompleted, archived: t.statusArchived }
   const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const [showAI, setShowAI] = useState(false)
+  const [showRisks, setShowRisks] = useState(false)
   const [agentTask, setAgentTask] = useState(null)
   const [taskForm, setTaskForm] = useState(null)
   const [editingGuide, setEditingGuide] = useState(false)
@@ -149,7 +151,8 @@ export default function ProjectDetail({
       <div className="project-header">
         <div className="flex items-center gap-8">
           <h2 style={{ flex: 1 }}>{project.name}</h2>
-          <button className="btn btn-ai btn-sm" onClick={() => setShowAI(s => !s)}>{t.aiAssistant}</button>
+          <button className="btn btn-ai btn-sm" onClick={() => { setShowAI(s => !s); setShowRisks(false) }}>{t.aiAssistant}</button>
+          <button className="btn btn-sm" onClick={() => { setShowRisks(s => !s); setShowAI(false) }}>⚠️ {t.risksTab}</button>
           <button className="btn btn-sm" onClick={onEditProject}>{t.edit}</button>
           <button className="btn btn-danger btn-sm" onClick={onDeleteProject}>{t.delete}</button>
         </div>
@@ -262,6 +265,10 @@ export default function ProjectDetail({
             onApplyTasks={onBulkCreateTasks}
             onCreateNote={onCreateNote}
           />
+        )}
+
+        {showRisks && (
+          <RiskPanel project={project} onClose={() => setShowRisks(false)} />
         )}
       </div>
 

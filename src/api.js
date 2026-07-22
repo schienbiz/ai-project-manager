@@ -54,6 +54,13 @@ export const api = {
   createNote:      (data) => post('/pm/api/notes', data),
   deleteNote:      (id) => del(`/pm/api/notes/${id}`),
 
+  // Risks
+  getRisks:        (projectId) => fetch(`/pm/api/risks?projectId=${projectId}`).then(json),
+  createRisk:      (data) => post('/pm/api/risks', data),
+  updateRisk:      (id, data) => put(`/pm/api/risks/${id}`, data),
+  deleteRisk:      (id) => del(`/pm/api/risks/${id}`),
+  extractRisks:    (projectId, lang) => post('/pm/api/ai/risks-extract', { projectId, lang }),
+
   // Admin (all protected by x-admin-token)
   getAdminStatus:       () => adminGet('/pm/api/admin/status'),
   restartService:       (label) => adminPost('/pm/api/admin/restart', { label }),

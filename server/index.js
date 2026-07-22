@@ -112,6 +112,20 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL
     )`)
   await db.query(`
+    CREATE TABLE IF NOT EXISTS risks (
+      id UUID PRIMARY KEY,
+      project_id UUID NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      probability TEXT NOT NULL DEFAULT 'medium',
+      impact TEXT NOT NULL DEFAULT 'medium',
+      owner TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    )`)
+  await db.query(`CREATE INDEX IF NOT EXISTS risks_project_idx ON risks (project_id)`)
+  await db.query(`
     CREATE TABLE IF NOT EXISTS digest_state (
       id INT PRIMARY KEY DEFAULT 1,
       last_digest_at TIMESTAMPTZ
@@ -149,6 +163,40 @@ function rowToNote(r) {
     id: r.id, projectId: r.project_id,
     content: r.content, aiExtracted: r.ai_extracted,
     createdAt: r.created_at,
+  }
+}
+
+// Probability × Impact → the framework's 4 actions, computed in CODE (never the
+// LLM) so a stored risk's recommended action can't drift from its matrix cell.
+//   high impact × high prob → mitigate    (立即處理)
+//   high impact × lower prob → fallback    (準備備案)
+//   high prob × lower impact → contingency (制定應變)
+//   medium × medium          → contingency
+//   otherwise (low corner)   → monitor     (定期監控)
+const RISK_LEVEL = { high: 2, medium: 1, low: 0 }
+function riskAction(probability, impact) {
+  const p = RISK_LEVEL[probability] ?? 1
+  const i = RISK_LEVEL[impact] ?? 1
+  if (i >= 2 && p >= 2) return 'mitigate'
+  if (i >= 2)           return 'fallback'
+  if (p >= 2)           return 'contingency'
+  if (i >= 1 && p >= 1) return 'contingency'
+  return 'monitor'
+}
+// 1-3 per axis (low=1) so a low-probability HIGH-impact risk never collapses to
+// zero and outranks a trivial low/low one. Range 1..9.
+function riskSeverity(probability, impact) {
+  return ((RISK_LEVEL[probability] ?? 1) + 1) * ((RISK_LEVEL[impact] ?? 1) + 1)
+}
+function rowToRisk(r) {
+  return {
+    id: r.id, projectId: r.project_id,
+    description: r.description,
+    probability: r.probability, impact: r.impact,
+    owner: r.owner, status: r.status, source: r.source,
+    action: riskAction(r.probability, r.impact),
+    severity: riskSeverity(r.probability, r.impact),
+    createdAt: r.created_at, updatedAt: r.updated_at,
   }
 }
 
@@ -752,6 +800,122 @@ app.delete('/api/notes/:id', async (req, res) => {
   try {
     await db.query('DELETE FROM notes WHERE id=$1', [req.params.id])
     res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Risk register (Probability × Impact matrix) ───────────────────────────────
+const RISK_ENUM = ['high', 'medium', 'low']
+const RISK_STATUS = ['open', 'mitigating', 'closed']
+const normLevel  = (v, fb = 'medium') => (RISK_ENUM.includes(v) ? v : fb)
+const normStatus = (v) => (RISK_STATUS.includes(v) ? v : 'open')
+
+app.get('/api/risks', async (req, res) => {
+  try {
+    const { projectId } = req.query
+    const { rows } = projectId
+      ? await db.query('SELECT * FROM risks WHERE project_id=$1', [projectId])
+      : await db.query('SELECT * FROM risks')
+    // severity desc, then newest first — computed fields aren't SQL-sortable
+    const risks = rows.map(rowToRisk).sort((a, b) =>
+      b.severity - a.severity || (a.createdAt < b.createdAt ? 1 : -1))
+    res.json(risks)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.post('/api/risks', async (req, res) => {
+  try {
+    if (!req.body.projectId) return res.status(400).json({ error: 'projectId required' })
+    const item = {
+      id: uid(), projectId: req.body.projectId,
+      description: (req.body.description || '').trim(),
+      probability: normLevel(req.body.probability),
+      impact: normLevel(req.body.impact),
+      owner: req.body.owner || '',
+      status: normStatus(req.body.status),
+      source: req.body.source === 'ai' ? 'ai' : 'manual',
+      createdAt: now(), updatedAt: now(),
+    }
+    if (!item.description) return res.status(400).json({ error: 'description required' })
+    await db.query(
+      `INSERT INTO risks (id,project_id,description,probability,impact,owner,status,source,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [item.id, item.projectId, item.description, item.probability, item.impact,
+       item.owner, item.status, item.source, item.createdAt, item.updatedAt]
+    )
+    const { rows } = await db.query('SELECT * FROM risks WHERE id=$1', [item.id])
+    res.json(rowToRisk(rows[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.put('/api/risks/:id', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM risks WHERE id=$1', [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'not found' })
+    const cur = rows[0]
+    const next = {
+      description: req.body.description !== undefined ? String(req.body.description).trim() : cur.description,
+      probability: req.body.probability !== undefined ? normLevel(req.body.probability) : cur.probability,
+      impact: req.body.impact !== undefined ? normLevel(req.body.impact) : cur.impact,
+      owner: req.body.owner !== undefined ? req.body.owner : cur.owner,
+      status: req.body.status !== undefined ? normStatus(req.body.status) : cur.status,
+    }
+    await db.query(
+      `UPDATE risks SET description=$1,probability=$2,impact=$3,owner=$4,status=$5,updated_at=$6 WHERE id=$7`,
+      [next.description, next.probability, next.impact, next.owner, next.status, now(), req.params.id]
+    )
+    const { rows: after } = await db.query('SELECT * FROM risks WHERE id=$1', [req.params.id])
+    res.json(rowToRisk(after[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.delete('/api/risks/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM risks WHERE id=$1', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// AI scans the project's tasks and proposes risks with probability/impact.
+// Returns JSON for review — nothing is persisted until the user applies them.
+app.post('/api/ai/risks-extract', async (req, res) => {
+  try {
+    const { rows: pr } = await db.query('SELECT * FROM projects WHERE id=$1', [req.body.projectId])
+    if (!pr.length) return res.status(404).json({ error: 'project not found' })
+    const project = rowToProject(pr[0])
+    const { rows: tr } = await db.query('SELECT * FROM tasks WHERE project_id=$1', [project.id])
+    const tasks = tr.map(rowToTask)
+    const today = new Date().toISOString().split('T')[0]
+    const overdue = tasks.filter(t => t.dueDate && t.dueDate < today && t.status !== 'done').map(t => t.title)
+    const blocked = tasks.filter(t => t.status === 'blocked').map(t => t.title)
+    const done = tasks.filter(t => t.status === 'done').length
+
+    const prompt = `Identify the top project risks. Return ONLY a JSON array (max 6):
+[{"description":"the risk, one sentence","probability":"high|medium|low","impact":"high|medium|low"}]
+
+Project: ${project.name} — ${project.goal || 'no goal set'}
+Due: ${project.dueDate || 'not set'} | Today: ${today}
+Progress: ${done}/${tasks.length} done
+Overdue: ${overdue.join(', ') || 'none'}
+Blocked: ${blocked.join(', ') || 'none'}
+
+Rate probability = how likely it materializes, impact = damage if it does. Return only the JSON array.`
+    const text = await multiGenerate([
+      { role: 'system', content: getPMSystem() + getLangDirective(req.body.lang) },
+      { role: 'user', content: prompt },
+    ], 900)
+    const match = text.match(/\[[\s\S]*\]/)
+    if (!match) return res.json({ risks: [] })
+    let arr
+    try { arr = JSON.parse(match[0]) } catch { return res.json({ risks: [] }) }
+    const risks = (Array.isArray(arr) ? arr : [])
+      .filter(r => r && r.description)
+      .map(r => ({
+        description: String(r.description).trim(),
+        probability: normLevel(r.probability),
+        impact: normLevel(r.impact),
+        action: riskAction(normLevel(r.probability), normLevel(r.impact)),
+      }))
+    res.json({ risks })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
