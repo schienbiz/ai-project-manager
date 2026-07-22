@@ -1669,6 +1669,64 @@ function digestSentToday() {
   return taipeiDay(_lastDigestAt) === taipeiDay(new Date())
 }
 
+// Proactive push: the framework signals the user should act on TODAY — open
+// "mitigate" risks (high prob × high impact) and flow bottlenecks where work is
+// genuinely queuing. Reuses rowToRisk / computeFlow so the digest can't disagree
+// with what the Risk and Flow panels show. Returns Telegram markdown or ''.
+const DIGEST_COL_ZH = { todo: '待辦', in_progress: '進行中', review: '審查', blocked: '阻塞' }
+const BOTTLENECK_DWELL_H = 72 // only flag a column that has queued >3 days on average
+const fmtDwellZh = (h) => (h < 48 ? `${h}h` : `${Math.round(h / 24)}天`)
+
+async function buildProactiveAlerts(projects, allTasks) {
+  if (!projects.length) return ''
+  const ids = projects.map(p => p.id)
+  const nameById = Object.fromEntries(projects.map(p => [p.id, p.name]))
+  let out = ''
+
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM risks WHERE project_id = ANY($1::uuid[]) AND status <> 'closed'`, [ids])
+    const risks = rows.map(rowToRisk)
+      .filter(r => r.action === 'mitigate')
+      .sort((a, b) => b.severity - a.severity)
+      .slice(0, 4)
+    if (risks.length) {
+      out += '\n\n🔴 *需立即處理的風險:*\n' +
+        risks.map(r => `• *${nameById[r.projectId] || '?'}*: ${r.description}`).join('\n')
+    }
+  } catch (e) { console.warn('[digest] risk alerts failed:', e.message) }
+
+  try {
+    const { rows: er } = await db.query(
+      `SELECT * FROM task_events WHERE project_id = ANY($1::uuid[])`, [ids])
+    const evByProj = {}
+    for (const e of er) (evByProj[e.project_id] ||= []).push(
+      { taskId: e.task_id, fromStatus: e.from_status, toStatus: e.to_status, at: e.at })
+    const lines = []
+    for (const p of projects) {
+      const pt = allTasks.filter(t => t.projectId === p.id)
+      const flow = computeFlow(pt, evByProj[p.id] || [])
+      if (!flow.bottleneck) continue
+      const col = flow.columns.find(c => c.status === flow.bottleneck)
+      if (col && col.wip >= 2 && col.avgDwellHours >= BOTTLENECK_DWELL_H)
+        lines.push(`• *${p.name}*: ${col.wip} 個任務卡在「${DIGEST_COL_ZH[col.status] || col.status}」~${fmtDwellZh(col.avgDwellHours)}`)
+    }
+    if (lines.length) out += '\n\n⏳ *流動瓶頸:*\n' + lines.join('\n')
+  } catch (e) { console.warn('[digest] bottleneck alerts failed:', e.message) }
+
+  return out
+}
+
+app.get('/api/ai/digest/preview', async (req, res) => {
+  try {
+    const { rows } = await db.query(`SELECT * FROM projects WHERE status='active'`)
+    const projects = rows.map(rowToProject)
+    const { rows: tr } = await db.query('SELECT * FROM tasks')
+    const alerts = await buildProactiveAlerts(projects, tr.map(rowToTask))
+    res.json({ activeProjects: projects.length, alerts: alerts || '(no proactive alerts)' })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 async function sendMorningDigest(force = false) {
   const botToken = process.env.BOT_TOKEN
   const chatId   = process.env.OWNER_TELEGRAM_ID
@@ -1723,12 +1781,14 @@ Rules:
 
   const dateStr = new Date().toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'long', day: 'numeric', weekday: 'short' })
 
+  const alerts = await buildProactiveAlerts(projects, allTasks)
+
   const expiringKeys = loadVault().filter(e => e.expiry && daysUntil(e.expiry) <= 7)
   const keyWarning = expiringKeys.length
     ? '\n\n⚠️ *API Keys 即將到期:*\n' + expiringKeys.map(e => `• *${e.name}* — ${daysUntil(e.expiry) < 0 ? '已過期' : `${daysUntil(e.expiry)}天後到期`}`).join('\n')
     : ''
 
-  const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}${keyWarning}`
+  const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}${alerts}${keyWarning}`
 
   await sendTelegram(msg)
   _lastDigestAt = new Date().toISOString()
