@@ -376,6 +376,22 @@ async function streamGenerate(res, system, userPrompt, maxTokens = 2048) {
   res.end()
 }
 
+// Stream a pre-built string over the same SSE protocol the AIPanel consumes.
+// Used when the response is assembled server-side (e.g. code-computed verdicts)
+// rather than piped straight from the model. Distinct from streamText(), which
+// writes into an already-open agent stream.
+function streamPrebuilt(res, text) {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  const CHUNK = 12
+  for (let i = 0; i < text.length; i += CHUNK) {
+    res.write(`data: ${JSON.stringify({ text: text.slice(i, i + CHUNK) })}\n\n`)
+  }
+  res.write('data: [DONE]\n\n')
+  res.end()
+}
+
 // ── Express setup ─────────────────────────────────────────────────────────────
 app.use(cors())
 app.use(express.json({ limit: '2mb' }))
@@ -964,6 +980,169 @@ Provide:
 **This Week's Priorities:** (3–5 concrete cross-project actions)`
 
   await streamGenerate(res, getPMSystem() + getLangDirective(lang), prompt, 800)
+})
+
+// ── Decision quality (Impact × Reversibility × Urgency) ───────────────────────
+// The framework's decision rule is applied in CODE, not by the model — the LLM
+// only classifies the three axes + surfaces unknowns/options, so the verdict
+// can never contradict the framework. Mirrors Bezos one-way/two-way doors.
+function decideVerdict(impact, reversibility, urgency, lang) {
+  const zh = lang === 'zh'
+  const oneWay = reversibility === 'one-way'
+  let base
+  if (impact === 'low')
+    base = zh ? '⚡ 快速決定，不要耗腦力（低影響，正反都無妨）'
+              : '⚡ Decide fast, don\'t burn energy (low impact either way)'
+  else if (oneWay)
+    base = zh ? '🛑 慢一點，先多方驗證（不可逆的門：難以回頭）'
+              : '🛑 Slow down, gather evidence first (one-way door — hard to reverse)'
+  else
+    base = zh ? '🧪 先做小規模可逆實驗（可逆的門：可以走回頭路）'
+              : '🧪 Run a small reversible experiment (two-way door — you can walk it back)'
+  if (urgency === 'high' && impact !== 'low' && oneWay)
+    base += zh ? ' — 但時效緊迫：設定驗證時限（time-box），勿無限拖延'
+               : ' — but urgency is high: time-box the validation, don\'t stall indefinitely'
+  return base
+}
+
+// When JSON extraction/parse fails: if the model returned prose, show it; if it
+// returned a broken (usually truncated) JSON blob, show a clean retry hint rather
+// than dumping raw JSON at the user.
+function jsonFallback(text, lang) {
+  const t = (text || '').trim()
+  if (!t.startsWith('{'))
+    return t || (lang === 'zh' ? '⚠️ AI 未回傳內容，請再試一次。' : '⚠️ No response from AI, please try again.')
+  return lang === 'zh'
+    ? '⚠️ AI 回應被截斷或格式異常，請再試一次（可把描述寫短一點）。'
+    : '⚠️ AI response was truncated or malformed — please try again (a shorter description helps).'
+}
+
+const DECIDE_L = {
+  en: { title:'🧭 Decision Analysis', impact:'Impact', rev:'Reversibility', urg:'Urgency',
+        verdict:'⚖️ Verdict', rationale:'Rationale',
+        unknowns:'🔍 Key Unknowns — who is operating with insufficient information?', options:'🔀 Options',
+        impactV:{high:'High',medium:'Medium',low:'Low'},
+        revV:{'one-way':'One-way door (hard/expensive to undo)',reversible:'Two-way door (cheap to walk back)'},
+        urgV:{high:'High',medium:'Medium',low:'Low'} },
+  zh: { title:'🧭 決策分析', impact:'影響', rev:'可逆性', urg:'時效性',
+        verdict:'⚖️ 判斷', rationale:'理由',
+        unknowns:'🔍 關鍵未知 — 誰現在資訊不足？', options:'🔀 選項',
+        impactV:{high:'高',medium:'中',low:'低'},
+        revV:{'one-way':'不可逆（難／貴以回頭）',reversible:'可逆（容易走回頭路）'},
+        urgV:{high:'高',medium:'中',low:'低'} },
+}
+DECIDE_L.ar = DECIDE_L.en
+
+function buildDecideMd(d, verdict, lang) {
+  const L = DECIDE_L[lang] || DECIDE_L.en
+  const opts = Array.isArray(d.options) ? d.options : []
+  const unknowns = Array.isArray(d.keyUnknowns) ? d.keyUnknowns : []
+  let md = `## ${L.title}\n\n`
+  md += `**${L.impact}:** ${L.impactV[d.impact] || d.impact || '?'}\n`
+  md += `**${L.rev}:** ${L.revV[d.reversibility] || d.reversibility || '?'}\n`
+  md += `**${L.urg}:** ${L.urgV[d.urgency] || d.urgency || '?'}\n\n`
+  md += `### ${L.verdict}\n${verdict}\n\n`
+  if (d.rationale) md += `**${L.rationale}:** ${d.rationale}\n\n`
+  if (unknowns.length) md += `### ${L.unknowns}\n${unknowns.map(u => `- ${u}`).join('\n')}\n\n`
+  if (opts.length) {
+    md += `### ${L.options}\n`
+    opts.forEach((o, i) => {
+      md += `**${i + 1}. ${o.name ?? ''}** — 👍 ${o.pro ?? ''} · 👎 ${o.con ?? ''}\n`
+    })
+  }
+  return md.trim()
+}
+
+app.post('/api/ai/decide', async (req, res) => {
+  const { decision, context, lang } = req.body
+  if (!decision || !decision.trim()) return res.status(400).json({ error: 'decision required' })
+  const prompt = `Analyze this decision. Return ONLY a JSON object:
+{
+  "impact": "high" | "medium" | "low",
+  "reversibility": "one-way" | "reversible",
+  "urgency": "high" | "medium" | "low",
+  "rationale": "one sentence justifying the impact and reversibility calls",
+  "keyUnknowns": ["a critical fact still missing to decide well"],
+  "options": [{"name": "...", "pro": "...", "con": "..."}]
+}
+Definitions: "one-way" = hard or expensive to undo (Type-1 door); "reversible" = cheap to walk back (Type-2 door).
+Give 2-3 options and include at least one cheaper/faster/smaller alternative.
+Be concise: rationale one sentence, at most 3 keyUnknowns (each under 15 words), option pro/con one short phrase each.
+Return only the JSON object, no markdown.
+
+Decision: ${decision}
+Context: ${context || 'None'}`
+  try {
+    const text = await multiGenerate([
+      { role: 'system', content: getPMSystem() + getLangDirective(lang) },
+      { role: 'user', content: prompt },
+    ], 1200)
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) return streamPrebuilt(res, jsonFallback(text, lang))
+    let d
+    try { d = JSON.parse(match[0]) } catch { return streamPrebuilt(res, jsonFallback(text, lang)) }
+    const verdict = decideVerdict(d.impact, d.reversibility, d.urgency, lang)
+    return streamPrebuilt(res, buildDecideMd(d, verdict, lang))
+  } catch (err) {
+    return streamPrebuilt(res, `⚠️ ${err.message}`)
+  }
+})
+
+// ── Problem framing (before any work starts) ──────────────────────────────────
+const FRAME_L = {
+  en: { title:'🎯 Problem Framing', goal:'Real business goal', nothing:'If we do nothing',
+        alts:'💡 Cheaper / Faster Alternatives', rec:'✅ Recommendation', tradeoff:'trade-off' },
+  zh: { title:'🎯 問題定義', goal:'真正的商業目標', nothing:'若什麼都不做會怎樣',
+        alts:'💡 更便宜／更快的替代方案', rec:'✅ 建議', tradeoff:'取捨' },
+}
+FRAME_L.ar = FRAME_L.en
+
+function buildFrameMd(d, lang) {
+  const L = FRAME_L[lang] || FRAME_L.en
+  const alts = Array.isArray(d.alternatives) ? d.alternatives : []
+  let md = `## ${L.title}\n\n`
+  if (d.businessGoal) md += `**${L.goal}:** ${d.businessGoal}\n\n`
+  if (d.doNothingOutcome) md += `**${L.nothing}:** ${d.doNothingOutcome}\n\n`
+  if (alts.length) {
+    md += `### ${L.alts}\n`
+    alts.forEach((a, i) => {
+      md += `**${i + 1}. ${a.name ?? ''}** — ${a.cheaperFaster ?? ''} (${L.tradeoff}: ${a.tradeoff ?? ''})\n`
+    })
+    md += '\n'
+  }
+  if (d.recommendation) md += `### ${L.rec}\n${d.recommendation}`
+  return md.trim()
+}
+
+app.post('/api/ai/frame', async (req, res) => {
+  const { request, context, lang } = req.body
+  if (!request || !request.trim()) return res.status(400).json({ error: 'request required' })
+  const prompt = `Frame this request/feature BEFORE any work starts. Return ONLY a JSON object:
+{
+  "businessGoal": "the real underlying business outcome actually desired",
+  "doNothingOutcome": "what concretely happens if this is NOT built",
+  "alternatives": [{"name": "...", "cheaperFaster": "why it is cheaper or faster", "tradeoff": "..."}],
+  "recommendation": "build | defer | use-alternative — one sentence why"
+}
+Give 2-3 alternatives, at least one materially cheaper or faster than the full build.
+Be concise: each field one sentence, each alternative's fields one short phrase.
+Return only the JSON object, no markdown.
+
+Request: ${request}
+Context: ${context || 'None'}`
+  try {
+    const text = await multiGenerate([
+      { role: 'system', content: getPMSystem() + getLangDirective(lang) },
+      { role: 'user', content: prompt },
+    ], 1200)
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) return streamPrebuilt(res, jsonFallback(text, lang))
+    let d
+    try { d = JSON.parse(match[0]) } catch { return streamPrebuilt(res, jsonFallback(text, lang)) }
+    return streamPrebuilt(res, buildFrameMd(d, lang))
+  } catch (err) {
+    return streamPrebuilt(res, `⚠️ ${err.message}`)
+  }
 })
 
 // ── AI Team Agents ────────────────────────────────────────────────────────────

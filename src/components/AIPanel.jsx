@@ -11,6 +11,8 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
     { key: 'risks',   label: t.tabRisks },
     { key: 'report',  label: t.tabReport },
     { key: 'notes',   label: t.tabNotes },
+    { key: 'decide',  label: t.tabDecide },
+    { key: 'frame',   label: t.tabFrame },
   ]
 
   const [tab, setTab] = useState('plan')
@@ -26,6 +28,8 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
   const [applying, setApplying] = useState(false)
   const [planOpts, setPlanOpts] = useState({ teamSize: '', dueDate: project.dueDate || '' })
   const [notesText, setNotesText] = useState('')
+  const [decideText, setDecideText] = useState('')
+  const [frameText, setFrameText] = useState('')
   const abortRef = useRef(false)
 
   const run = async (endpoint, body) => {
@@ -82,6 +86,12 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
     } else if (tab === 'notes') {
       if (!notesText.trim()) return
       run('/pm/api/ai/parse-notes', { content: notesText, projectName: project.name, lang })
+    } else if (tab === 'decide') {
+      if (!decideText.trim()) return
+      run('/pm/api/ai/decide', { decision: decideText, context: project.goal || project.description || '', lang })
+    } else if (tab === 'frame') {
+      if (!frameText.trim()) return
+      run('/pm/api/ai/frame', { request: frameText, context: project.goal || project.description || '', lang })
     }
   }
 
@@ -98,7 +108,7 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
     setOutput(prev => prev + t.appliedMsg(parsedTasks.length))
   }
 
-  const placeholder = { plan: t.phPlan, standup: t.phStandup, risks: t.phRisks, report: t.phReport, notes: t.phNotes }
+  const placeholder = { plan: t.phPlan, standup: t.phStandup, risks: t.phRisks, report: t.phReport, notes: t.phNotes, decide: t.phDecide, frame: t.phFrame }
 
   return (
     <div className="ai-drawer">
@@ -142,6 +152,32 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
               placeholder={t.notesPastePlaceholder}
               rows={4}
               style={{ minHeight: 90 }}
+            />
+          </div>
+        )}
+
+        {tab === 'decide' && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>{t.decideInputLabel}</label>
+            <textarea
+              value={decideText}
+              onChange={e => setDecideText(e.target.value)}
+              placeholder={t.decidePlaceholder}
+              rows={3}
+              style={{ minHeight: 70 }}
+            />
+          </div>
+        )}
+
+        {tab === 'frame' && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>{t.frameInputLabel}</label>
+            <textarea
+              value={frameText}
+              onChange={e => setFrameText(e.target.value)}
+              placeholder={t.framePlaceholder}
+              rows={3}
+              style={{ minHeight: 70 }}
             />
           </div>
         )}
