@@ -1794,6 +1794,7 @@ Rules:
   _lastDigestAt = new Date().toISOString()
   await db.query('UPDATE digest_state SET last_digest_at=$1 WHERE id=1', [_lastDigestAt])
   console.log(`[digest] sent — ${projects.length} projects`)
+  return msg
 }
 
 function scheduleNextDigest() {
@@ -1814,8 +1815,13 @@ function scheduleNextDigest() {
 }
 
 app.get('/api/ai/digest/now', async (req, res) => {
-  res.json({ ok: true, message: 'Digest sending…' })
-  await sendMorningDigest().catch(e => console.error('[digest] manual trigger error:', e.message))
+  try {
+    const msg = await sendMorningDigest()
+    res.json({ ok: true, sent: !!msg, message: msg || '(nothing sent — no active projects or Telegram not configured)' })
+  } catch (e) {
+    console.error('[digest] manual trigger error:', e.message)
+    res.status(500).json({ error: e.message })
+  }
 })
 
 app.post('/api/admin/digest/send-now', requireAdmin, async (req, res) => {
