@@ -103,6 +103,8 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL
     )`)
+  await db.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS acceptance_criteria TEXT NOT NULL DEFAULT ''`)
+  await db.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on JSONB NOT NULL DEFAULT '[]'`)
   await db.query(`
     CREATE TABLE IF NOT EXISTS notes (
       id UUID PRIMARY KEY,
@@ -154,6 +156,8 @@ function rowToTask(r) {
     actualHours: r.actual_hours !== null ? Number(r.actual_hours) : null,
     dueDate: r.due_date, assignee: r.assignee, tags: r.tags,
     sortOrder: r.sort_order,
+    acceptanceCriteria: r.acceptance_criteria ?? '',
+    dependsOn: Array.isArray(r.depends_on) ? r.depends_on : [],
     agentType: r.agent_type, agentStatus: r.agent_status, agentOutput: r.agent_output,
     createdAt: r.created_at, updatedAt: r.updated_at,
   }
@@ -652,15 +656,18 @@ app.post('/api/tasks', async (req, res) => {
       dueDate: req.body.dueDate || null,
       assignee: req.body.assignee || '',
       tags: req.body.tags || [],
+      acceptanceCriteria: req.body.acceptanceCriteria || '',
+      dependsOn: Array.isArray(req.body.dependsOn) ? req.body.dependsOn : [],
       sortOrder,
       createdAt: now(), updatedAt: now(),
     }
     await db.query(
-      `INSERT INTO tasks (id,project_id,title,description,status,priority,estimated_hours,actual_hours,due_date,assignee,tags,sort_order,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      `INSERT INTO tasks (id,project_id,title,description,status,priority,estimated_hours,actual_hours,due_date,assignee,tags,acceptance_criteria,depends_on,sort_order,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [item.id, item.projectId, item.title, item.description, item.status, item.priority,
        item.estimatedHours, item.actualHours, item.dueDate, item.assignee,
-       JSON.stringify(item.tags), item.sortOrder, item.createdAt, item.updatedAt]
+       JSON.stringify(item.tags), item.acceptanceCriteria, JSON.stringify(item.dependsOn),
+       item.sortOrder, item.createdAt, item.updatedAt]
     )
     res.json(item)
   } catch (err) { res.status(500).json({ error: err.message }) }
@@ -727,14 +734,19 @@ app.put('/api/tasks/:id', async (req, res) => {
          due_date=$7, assignee=COALESCE($8,assignee),
          tags=COALESCE($9,tags), sort_order=COALESCE($10,sort_order),
          agent_type=COALESCE($11,agent_type), agent_status=$12,
-         agent_output=COALESCE($13,agent_output), updated_at=$14
-       WHERE id=$15 RETURNING *`,
+         agent_output=COALESCE($13,agent_output),
+         acceptance_criteria=COALESCE($14,acceptance_criteria),
+         depends_on=COALESCE($15,depends_on), updated_at=$16
+       WHERE id=$17 RETURNING *`,
       [body.title, body.description, body.status, body.priority,
        body.estimatedHours, body.actualHours,
        body.dueDate !== undefined ? body.dueDate : p.dueDate,
        body.assignee, body.tags ? JSON.stringify(body.tags) : null,
        body.sortOrder, body.agentType, agentStatus,
-       body.agentOutput, now(), req.params.id]
+       body.agentOutput,
+       body.acceptanceCriteria !== undefined ? body.acceptanceCriteria : null,
+       body.dependsOn !== undefined ? JSON.stringify(body.dependsOn) : null,
+       now(), req.params.id]
     )
     const updated = rowToTask(rows[0])
     res.json(updated)
@@ -766,6 +778,78 @@ app.delete('/api/tasks/:id', async (req, res) => {
   try {
     await db.query('DELETE FROM tasks WHERE id=$1', [req.params.id])
     res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Schedule: critical path + under-decomposition checks ──────────────────────
+const TWO_WEEKS_HOURS = 80 // 2 weeks × 40h; a task larger than this is likely under-decomposed
+
+// Longest-duration path through the dependency DAG (Kahn topo-sort + longest
+// path by estimatedHours). Returns the path, its total hours, cycle info, and
+// per-task warnings. Pure function of the task list — no DB, easy to test.
+function computeSchedule(tasks) {
+  const byId = new Map(tasks.map(t => [t.id, t]))
+  const weight = (t) => (Number(t.estimatedHours) > 0 ? Number(t.estimatedHours) : 0)
+  // edges u -> v where v depends on u (u is a prerequisite). Ignore refs to
+  // tasks that don't exist in this project (surfaced separately as a warning).
+  const preds = new Map(tasks.map(t => [t.id, (t.dependsOn || []).filter(d => byId.has(d))]))
+  const indeg = new Map(tasks.map(t => [t.id, 0]))
+  for (const t of tasks) for (const _ of preds.get(t.id)) indeg.set(t.id, indeg.get(t.id) + 1)
+
+  // Kahn topological order
+  const queue = tasks.filter(t => indeg.get(t.id) === 0).map(t => t.id)
+  const order = []
+  const indegWork = new Map(indeg)
+  const succ = new Map(tasks.map(t => [t.id, []]))
+  for (const t of tasks) for (const u of preds.get(t.id)) succ.get(u).push(t.id)
+  while (queue.length) {
+    const u = queue.shift()
+    order.push(u)
+    for (const v of succ.get(u)) {
+      indegWork.set(v, indegWork.get(v) - 1)
+      if (indegWork.get(v) === 0) queue.push(v)
+    }
+  }
+  const hasCycle = order.length < tasks.length
+  const cycleTaskIds = hasCycle ? tasks.map(t => t.id).filter(id => !order.includes(id)) : []
+
+  // Longest path over the acyclic portion
+  const dist = new Map(), parent = new Map()
+  for (const id of order) {
+    const t = byId.get(id)
+    let best = weight(t), from = null
+    for (const u of preds.get(id)) {
+      if ((dist.get(u) ?? 0) + weight(t) > best) { best = (dist.get(u) ?? 0) + weight(t); from = u }
+    }
+    dist.set(id, best); parent.set(id, from)
+  }
+  let endId = null, max = -1
+  for (const id of order) if ((dist.get(id) ?? 0) > max) { max = dist.get(id); endId = id }
+  const path = []
+  for (let cur = endId; cur != null; cur = parent.get(cur)) {
+    const t = byId.get(cur)
+    path.unshift({ id: t.id, title: t.title, estimatedHours: weight(t), status: t.status })
+  }
+
+  const warnings = []
+  for (const t of tasks) {
+    if (weight(t) > TWO_WEEKS_HOURS)
+      warnings.push({ taskId: t.id, title: t.title, type: 'undecomposed', detail: `${weight(t)}h > 2 weeks — break into smaller verifiable steps` })
+    const dangling = (t.dependsOn || []).filter(d => !byId.has(d))
+    if (dangling.length)
+      warnings.push({ taskId: t.id, title: t.title, type: 'dangling-dep', detail: `depends on ${dangling.length} deleted task(s)` })
+  }
+  if (hasCycle)
+    warnings.push({ taskId: null, title: '', type: 'cycle', detail: `dependency cycle among ${cycleTaskIds.length} task(s)` })
+
+  return { criticalPath: hasCycle ? [] : path, totalHours: hasCycle ? 0 : max, hasCycle, cycleTaskIds, warnings }
+}
+
+app.get('/api/projects/:id/schedule', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM tasks WHERE project_id=$1', [req.params.id])
+    const tasks = rows.map(rowToTask).filter(t => t.status !== 'done')
+    res.json(computeSchedule(tasks))
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
@@ -971,9 +1055,10 @@ Return ONLY a valid JSON array. Each task object must have exactly these fields:
 - "title": string (start with an action verb, concise)
 - "description": string (1-2 sentences of context)
 - "priority": "low" | "medium" | "high" | "urgent"
-- "estimatedHours": number
+- "estimatedHours": number (keep any single task under 80h; break bigger work into multiple tasks)
 - "status": "todo"
 - "dueDate": "YYYY-MM-DD" or null
+- "acceptanceCriteria": string (one line: how you'll know this task is truly done)
 
 Generate 8-15 tasks covering the full project lifecycle in logical order. Return only the JSON array, no markdown, no explanation.`
 

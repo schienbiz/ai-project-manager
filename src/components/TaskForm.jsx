@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api.js'
 import { useLang } from '../i18n.js'
 
-export default function TaskForm({ task, defaultStatus, projectId, projectName, onSave, onClose }) {
+export default function TaskForm({ task, defaultStatus, projectId, projectName, projectTasks = [], onSave, onClose }) {
   const { t, lang } = useLang()
   const CONFIDENCE_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh }
   const [translating, setTranslating] = useState(false)
@@ -15,7 +15,14 @@ export default function TaskForm({ task, defaultStatus, projectId, projectName, 
     actualHours:    task?.actualHours    ?? '',
     dueDate:        task?.dueDate        || '',
     assignee:       task?.assignee       || '',
+    acceptanceCriteria: task?.acceptanceCriteria || '',
+    dependsOn:      task?.dependsOn      || [],
   })
+  const depOptions = projectTasks.filter(x => x.id !== task?.id)
+  const toggleDep = (id) => setForm(f => ({
+    ...f,
+    dependsOn: f.dependsOn.includes(id) ? f.dependsOn.filter(d => d !== id) : [...f.dependsOn, id],
+  }))
   const [saving, setSaving] = useState(false)
   const [estimate, setEstimate] = useState(null)
   const [estimating, setEstimating] = useState(false)
@@ -91,6 +98,10 @@ export default function TaskForm({ task, defaultStatus, projectId, projectName, 
             <div className="form-group">
               <label>{t.descriptionLabel}</label>
               <textarea value={form.description} onChange={e => set('description', e.target.value)} placeholder={t.taskDescPlaceholder} rows={3} />
+            </div>
+            <div className="form-group">
+              <label>✓ {t.acceptanceCriteria}</label>
+              <textarea value={form.acceptanceCriteria} onChange={e => set('acceptanceCriteria', e.target.value)} placeholder={t.acPlaceholder} rows={2} />
             </div>
             <div className="form-row">
               <div className="form-group">
@@ -168,6 +179,21 @@ export default function TaskForm({ task, defaultStatus, projectId, projectName, 
                 <input value={form.assignee} onChange={e => set('assignee', e.target.value)} placeholder={t.assigneePlaceholder} />
               </div>
             </div>
+
+            {depOptions.length > 0 && (
+              <div className="form-group">
+                <label>🔗 {t.dependsOnLabel}</label>
+                <div className="dep-picker">
+                  {depOptions.map(d => (
+                    <label key={d.id} className={`dep-option ${form.dependsOn.includes(d.id) ? 'on' : ''}`}>
+                      <input type="checkbox" checked={form.dependsOn.includes(d.id)} onChange={() => toggleDep(d.id)} />
+                      <span>{d.title}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="dep-hint">{t.dependsOnHint}</div>
+              </div>
+            )}
           </div>
           <div className="modal-footer">
             <button type="button" className="btn" onClick={onClose}>{t.cancel}</button>

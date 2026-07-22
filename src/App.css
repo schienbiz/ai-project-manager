@@ -692,3 +692,36 @@ body {
   .risk-row-controls { gap: 6px; }
   .risk-owner { min-width: 60px; }
 }
+
+/* ── Task dependency picker (TaskForm) ────────────────────────────────────── */
+.dep-picker { display: flex; flex-direction: column; gap: 2px; max-height: 140px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px; background: var(--bg); }
+.dep-option { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); padding: 3px 4px; border-radius: 4px; cursor: pointer; }
+.dep-option:hover { background: var(--surface2); }
+.dep-option.on { color: var(--accent); }
+.dep-option input { margin: 0; }
+.dep-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* ── Task card tags (AC / deps / under-decomposed) ────────────────────────── */
+.task-tag { font-size: 10px; padding: 1px 5px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--border); }
+.task-ac { color: var(--success); }
+.task-dep { color: var(--accent); }
+.task-undecomp { color: #f0883e; border-color: rgba(219,109,40,.4); background: rgba(219,109,40,.15); }
+
+/* ── Schedule / Critical Path panel ───────────────────────────────────────── */
+.sched-empty { font-size: 13px; color: var(--muted); padding: 12px; background: var(--surface2); border-radius: 8px; }
+.sched-path { display: flex; flex-direction: column; gap: 4px; }
+.sched-node { display: flex; align-items: center; gap: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; position: relative; }
+.sched-node:not(:last-child)::after { content: '↓'; position: absolute; left: 16px; bottom: -13px; color: var(--muted); font-size: 11px; z-index: 1; }
+.sched-num { width: 18px; height: 18px; border-radius: 50%; background: var(--accent-dim); color: var(--accent); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sched-title { flex: 1; font-size: 13px; }
+.sched-hours { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sched-total { text-align: end; font-size: 13px; color: var(--muted); margin-top: 8px; }
+.sched-clear { font-size: 13px; color: var(--success); padding: 10px; background: rgba(63,185,80,.10); border-radius: 8px; }
+.sched-warns { display: flex; flex-direction: column; gap: 6px; }
+.sched-warn { display: flex; gap: 9px; align-items: flex-start; background: var(--surface2); border: 1px solid var(--border); border-inline-start-width: 3px; border-radius: 8px; padding: 8px 10px; }
+.sched-warn.warn-undecomposed { border-inline-start-color: #f0883e; }
+.sched-warn.warn-dangling-dep { border-inline-start-color: #e3b341; }
+.sched-warn.warn-cycle { border-inline-start-color: var(--danger); }
+.sched-warn-icon { font-size: 15px; line-height: 1.2; }
+.sched-warn-type { font-size: 13px; font-weight: 600; }
+.sched-warn-detail { font-size: 12px; color: var(--muted); margin-top: 1px; }

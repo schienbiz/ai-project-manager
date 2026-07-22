@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import AIPanel from './AIPanel.jsx'
 import RiskPanel from './RiskPanel.jsx'
+import SchedulePanel from './SchedulePanel.jsx'
 import AgentPanel from './AgentPanel.jsx'
 import TaskForm from './TaskForm.jsx'
 import { useLang } from '../i18n.js'
@@ -92,6 +93,7 @@ export default function ProjectDetail({
   const PRIORITY_LABEL = { low: t.priorityLow, medium: t.priorityMedium, high: t.priorityHigh, urgent: t.priorityUrgent }
   const [showAI, setShowAI] = useState(false)
   const [showRisks, setShowRisks] = useState(false)
+  const [showSchedule, setShowSchedule] = useState(false)
   const [agentTask, setAgentTask] = useState(null)
   const [taskForm, setTaskForm] = useState(null)
   const [editingGuide, setEditingGuide] = useState(false)
@@ -151,8 +153,9 @@ export default function ProjectDetail({
       <div className="project-header">
         <div className="flex items-center gap-8">
           <h2 style={{ flex: 1 }}>{project.name}</h2>
-          <button className="btn btn-ai btn-sm" onClick={() => { setShowAI(s => !s); setShowRisks(false) }}>{t.aiAssistant}</button>
-          <button className="btn btn-sm" onClick={() => { setShowRisks(s => !s); setShowAI(false) }}>⚠️ {t.risksTab}</button>
+          <button className="btn btn-ai btn-sm" onClick={() => { setShowAI(s => !s); setShowRisks(false); setShowSchedule(false) }}>{t.aiAssistant}</button>
+          <button className="btn btn-sm" onClick={() => { setShowRisks(s => !s); setShowAI(false); setShowSchedule(false) }}>⚠️ {t.risksTab}</button>
+          <button className="btn btn-sm" onClick={() => { setShowSchedule(s => !s); setShowAI(false); setShowRisks(false) }}>🧭 {t.scheduleTab}</button>
           <button className="btn btn-sm" onClick={onEditProject}>{t.edit}</button>
           <button className="btn btn-danger btn-sm" onClick={onDeleteProject}>{t.delete}</button>
         </div>
@@ -270,6 +273,10 @@ export default function ProjectDetail({
         {showRisks && (
           <RiskPanel project={project} onClose={() => setShowRisks(false)} />
         )}
+
+        {showSchedule && (
+          <SchedulePanel project={project} onClose={() => setShowSchedule(false)} />
+        )}
       </div>
 
       {taskForm && (
@@ -278,6 +285,7 @@ export default function ProjectDetail({
           defaultStatus={taskForm.status}
           projectId={project.id}
           projectName={project.name}
+          projectTasks={tasks}
           onSave={async (data) => {
             if (taskForm.task) {
               await onUpdateTask(taskForm.task.id, data)
@@ -428,6 +436,9 @@ function TaskCard({ task, isDragging, onDragStart, onEdit, onDelete, onQuickDone
         }
         {task.dueDate && <span className={`task-due ${cls}`}>{fmtDate(task.dueDate, t.dateLocale)}</span>}
         {task.assignee && <span className="text-muted text-sm">{task.assignee}</span>}
+        {task.acceptanceCriteria && <span className="task-tag task-ac" title={task.acceptanceCriteria}>✓</span>}
+        {task.dependsOn?.length > 0 && <span className="task-tag task-dep" title={t.dependsOnLabel}>🔗{task.dependsOn.length}</span>}
+        {Number(task.estimatedHours) > 80 && <span className="task-tag task-undecomp" title={t.undecomposedHint}>✂️</span>}
       </div>
       <div className="task-actions">
         <button className="btn btn-sm btn-ai" onClick={onRunAgent} title={t.agentRun}>🤖</button>

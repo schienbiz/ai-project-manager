@@ -54,6 +54,9 @@ export const api = {
   createNote:      (data) => post('/pm/api/notes', data),
   deleteNote:      (id) => del(`/pm/api/notes/${id}`),
 
+  // Schedule (critical path + checks)
+  getSchedule:     (projectId) => fetch(`/pm/api/projects/${projectId}/schedule`).then(json),
+
   // Risks
   getRisks:        (projectId) => fetch(`/pm/api/risks?projectId=${projectId}`).then(json),
   createRisk:      (data) => post('/pm/api/risks', data),
