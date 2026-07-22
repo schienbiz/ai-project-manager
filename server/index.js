@@ -1647,18 +1647,33 @@ app.post('/api/ai/agent-run', async (req, res) => {
 })
 
 // ── Morning digest ────────────────────────────────────────────────────────────
+// Returns true only if Telegram actually accepted the message. fetch does NOT
+// throw on 401/400, so the old fire-and-forget silently logged success while
+// every send 401'd on a stale token. Now we read the API response, auto-recover
+// from Markdown parse errors by resending as plain text, and surface the rest.
 async function sendTelegram(text) {
   const botToken = process.env.BOT_TOKEN
   const chatId   = process.env.OWNER_TELEGRAM_ID
-  if (!botToken || !chatId) return
+  if (!botToken || !chatId) { console.warn('[telegram] BOT_TOKEN/OWNER_TELEGRAM_ID not set'); return false }
   const _fetch = customFetch ?? fetch
-  try {
-    await _fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+  const post = async (body) => {
+    const r = await _fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
+      body: JSON.stringify(body),
     })
-  } catch (err) { console.error('[telegram] send error:', err) }
+    const data = await r.json().catch(() => ({}))
+    return { ok: r.ok && data.ok === true, status: r.status, desc: data.description }
+  }
+  try {
+    let res = await post({ chat_id: chatId, text, parse_mode: 'Markdown' })
+    if (!res.ok && /parse|entit/i.test(res.desc || '')) {
+      console.warn(`[telegram] markdown parse failed (${res.desc}) — resending as plain text`)
+      res = await post({ chat_id: chatId, text })
+    }
+    if (!res.ok) console.error(`[telegram] send failed: ${res.status} ${res.desc}`)
+    return res.ok
+  } catch (err) { console.error('[telegram] send error:', err.message); return false }
 }
 
 let _lastDigestAt = null
@@ -1790,7 +1805,8 @@ Rules:
 
   const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}${alerts}${keyWarning}`
 
-  await sendTelegram(msg)
+  const ok = await sendTelegram(msg)
+  if (!ok) { console.error('[digest] Telegram send failed — not marking as sent'); return null }
   _lastDigestAt = new Date().toISOString()
   await db.query('UPDATE digest_state SET last_digest_at=$1 WHERE id=1', [_lastDigestAt])
   console.log(`[digest] sent — ${projects.length} projects`)
