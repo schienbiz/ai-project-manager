@@ -56,6 +56,7 @@ export const api = {
 
   // Schedule (critical path + checks)
   getSchedule:     (projectId) => fetch(`/pm/api/projects/${projectId}/schedule`).then(json),
+  getFlow:         (projectId) => fetch(`/pm/api/projects/${projectId}/flow`).then(json),
 
   // Risks
   getRisks:        (projectId) => fetch(`/pm/api/risks?projectId=${projectId}`).then(json),

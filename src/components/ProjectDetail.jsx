@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import AIPanel from './AIPanel.jsx'
 import RiskPanel from './RiskPanel.jsx'
 import SchedulePanel from './SchedulePanel.jsx'
+import FlowPanel from './FlowPanel.jsx'
 import AgentPanel from './AgentPanel.jsx'
 import TaskForm from './TaskForm.jsx'
 import { useLang } from '../i18n.js'
@@ -94,6 +95,7 @@ export default function ProjectDetail({
   const [showAI, setShowAI] = useState(false)
   const [showRisks, setShowRisks] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
+  const [showFlow, setShowFlow] = useState(false)
   const [agentTask, setAgentTask] = useState(null)
   const [taskForm, setTaskForm] = useState(null)
   const [editingGuide, setEditingGuide] = useState(false)
@@ -153,9 +155,10 @@ export default function ProjectDetail({
       <div className="project-header">
         <div className="flex items-center gap-8">
           <h2 style={{ flex: 1 }}>{project.name}</h2>
-          <button className="btn btn-ai btn-sm" onClick={() => { setShowAI(s => !s); setShowRisks(false); setShowSchedule(false) }}>{t.aiAssistant}</button>
-          <button className="btn btn-sm" onClick={() => { setShowRisks(s => !s); setShowAI(false); setShowSchedule(false) }}>⚠️ {t.risksTab}</button>
-          <button className="btn btn-sm" onClick={() => { setShowSchedule(s => !s); setShowAI(false); setShowRisks(false) }}>🧭 {t.scheduleTab}</button>
+          <button className="btn btn-ai btn-sm" onClick={() => { setShowAI(s => !s); setShowRisks(false); setShowSchedule(false); setShowFlow(false) }}>{t.aiAssistant}</button>
+          <button className="btn btn-sm" onClick={() => { setShowRisks(s => !s); setShowAI(false); setShowSchedule(false); setShowFlow(false) }}>⚠️ {t.risksTab}</button>
+          <button className="btn btn-sm" onClick={() => { setShowSchedule(s => !s); setShowAI(false); setShowRisks(false); setShowFlow(false) }}>🧭 {t.scheduleTab}</button>
+          <button className="btn btn-sm" onClick={() => { setShowFlow(s => !s); setShowAI(false); setShowRisks(false); setShowSchedule(false) }}>📊 {t.flowTab}</button>
           <button className="btn btn-sm" onClick={onEditProject}>{t.edit}</button>
           <button className="btn btn-danger btn-sm" onClick={onDeleteProject}>{t.delete}</button>
         </div>
@@ -276,6 +279,10 @@ export default function ProjectDetail({
 
         {showSchedule && (
           <SchedulePanel project={project} onClose={() => setShowSchedule(false)} />
+        )}
+
+        {showFlow && (
+          <FlowPanel project={project} onClose={() => setShowFlow(false)} />
         )}
       </div>
 

@@ -128,6 +128,16 @@ async function initDb() {
     )`)
   await db.query(`CREATE INDEX IF NOT EXISTS risks_project_idx ON risks (project_id)`)
   await db.query(`
+    CREATE TABLE IF NOT EXISTS task_events (
+      id UUID PRIMARY KEY,
+      task_id UUID NOT NULL,
+      project_id UUID NOT NULL,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      at TIMESTAMPTZ NOT NULL
+    )`)
+  await db.query(`CREATE INDEX IF NOT EXISTS task_events_project_idx ON task_events (project_id)`)
+  await db.query(`
     CREATE TABLE IF NOT EXISTS digest_state (
       id INT PRIMARY KEY DEFAULT 1,
       last_digest_at TIMESTAMPTZ
@@ -605,6 +615,8 @@ app.put('/api/projects/:id', async (req, res) => {
 app.delete('/api/projects/:id', async (req, res) => {
   try {
     await db.query('DELETE FROM notes WHERE project_id=$1', [req.params.id])
+    await db.query('DELETE FROM risks WHERE project_id=$1', [req.params.id])
+    await db.query('DELETE FROM task_events WHERE project_id=$1', [req.params.id])
     await db.query('DELETE FROM tasks WHERE project_id=$1', [req.params.id])
     await db.query('DELETE FROM projects WHERE id=$1', [req.params.id])
     res.json({ ok: true })
@@ -635,6 +647,17 @@ const VALID_TASK_STATUS   = new Set(['todo', 'in_progress', 'done', 'cancelled']
 const VALID_TASK_PRIORITY = new Set(['low', 'medium', 'high', 'urgent'])
 const VALID_PROJECT_STATUS   = new Set(['active', 'paused', 'completed', 'archived'])
 const VALID_PROJECT_PRIORITY = new Set(['low', 'medium', 'high', 'urgent'])
+
+// Append a status-transition row for flow metrics. Fire-and-forget: metrics are
+// non-critical, so a logging failure must never break task create/update.
+async function logTransition(taskId, projectId, fromStatus, toStatus) {
+  try {
+    await db.query(
+      'INSERT INTO task_events (id,task_id,project_id,from_status,to_status,at) VALUES ($1,$2,$3,$4,$5,$6)',
+      [uid(), taskId, projectId, fromStatus, toStatus, now()]
+    )
+  } catch (err) { console.error('[flow] logTransition failed:', err.message) }
+}
 
 app.post('/api/tasks', async (req, res) => {
   try {
@@ -670,6 +693,7 @@ app.post('/api/tasks', async (req, res) => {
        item.sortOrder, item.createdAt, item.updatedAt]
     )
     res.json(item)
+    logTransition(item.id, item.projectId, null, item.status)
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
@@ -751,6 +775,10 @@ app.put('/api/tasks/:id', async (req, res) => {
     const updated = rowToTask(rows[0])
     res.json(updated)
 
+    if (body.status && body.status !== p.status) {
+      logTransition(req.params.id, updated.projectId, p.status, body.status)
+    }
+
     if (trigger) {
       runAgentBackground(req.params.id, updated.projectId, _lang || 'en').catch(err =>
         console.error('[agent-bg] unhandled:', err)
@@ -776,6 +804,7 @@ app.post('/api/tasks/:id/agent/retry', async (req, res) => {
 
 app.delete('/api/tasks/:id', async (req, res) => {
   try {
+    await db.query('DELETE FROM task_events WHERE task_id=$1', [req.params.id])
     await db.query('DELETE FROM tasks WHERE id=$1', [req.params.id])
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
@@ -850,6 +879,100 @@ app.get('/api/projects/:id/schedule', async (req, res) => {
     const { rows } = await db.query('SELECT * FROM tasks WHERE project_id=$1', [req.params.id])
     const tasks = rows.map(rowToTask).filter(t => t.status !== 'done')
     res.json(computeSchedule(tasks))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Flow metrics: dwell time, rework, bottleneck, cycle time ──────────────────
+// Systems-thinking view: where is work queuing (dwell), where is it looping back
+// (rework), and what column is the bottleneck. Derived from the task_events log,
+// so metrics accrue from the moment logging started — no fabricated history.
+const FLOW_ORDER = { todo: 0, in_progress: 1, review: 2, done: 3 }
+const DWELL_COLS = ['todo', 'in_progress', 'review', 'blocked']
+function computeFlow(tasks, events, nowMs = Date.now()) {
+  const round1 = (ms) => Math.round(ms / 360000) / 10 // ms → hours, 1 decimal
+  const byTask = new Map()
+  for (const e of events) {
+    if (!byTask.has(e.taskId)) byTask.set(e.taskId, [])
+    byTask.get(e.taskId).push(e)
+  }
+
+  const wip = { todo: 0, in_progress: 0, review: 0, done: 0, blocked: 0 }
+  const dwellSum = {}, dwellN = {}, oldest = {}
+  for (const c of DWELL_COLS) { dwellSum[c] = 0; dwellN[c] = 0; oldest[c] = null }
+
+  for (const t of tasks) {
+    wip[t.status] = (wip[t.status] || 0) + 1
+    if (t.status === 'done') continue
+    let entryMs = null
+    const evs = byTask.get(t.id)
+    if (evs) {
+      const last = [...evs].reverse().find(e => e.toStatus === t.status)
+      if (last) entryMs = Date.parse(last.at)
+    }
+    if (!entryMs) entryMs = Date.parse(t.updatedAt || t.createdAt) // fallback for pre-logging tasks
+    const dwell = Math.max(0, nowMs - entryMs)
+    if (t.status in dwellSum) {
+      dwellSum[t.status] += dwell
+      dwellN[t.status]++
+      if (!oldest[t.status] || dwell > oldest[t.status].dwellH * 3600000)
+        oldest[t.status] = { title: t.title, dwellH: round1(dwell) }
+    }
+  }
+
+  // rework = backward transitions across ordered columns (blocked excluded)
+  let rework = 0
+  const reworkDetail = {}
+  for (const e of events) {
+    const f = FLOW_ORDER[e.fromStatus], to = FLOW_ORDER[e.toStatus]
+    if (f != null && to != null && to < f) {
+      rework++
+      const k = `${e.fromStatus} → ${e.toStatus}`
+      reworkDetail[k] = (reworkDetail[k] || 0) + 1
+    }
+  }
+
+  // cycle time: first in_progress → done, for currently-done tasks
+  let ctSum = 0, ctN = 0
+  for (const t of tasks) {
+    if (t.status !== 'done') continue
+    const evs = byTask.get(t.id)
+    if (!evs) continue
+    const firstIP = evs.find(e => e.toStatus === 'in_progress')
+    const doneEv = [...evs].reverse().find(e => e.toStatus === 'done')
+    if (firstIP && doneEv) {
+      const span = Date.parse(doneEv.at) - Date.parse(firstIP.at)
+      if (span > 0) { ctSum += span; ctN++ }
+    }
+  }
+
+  const avgDwell = (c) => (dwellN[c] ? round1(dwellSum[c] / dwellN[c]) : 0)
+  const columns = ['todo', 'in_progress', 'review', 'blocked', 'done'].map(c => ({
+    status: c, wip: wip[c] || 0,
+    avgDwellHours: c === 'done' ? null : avgDwell(c),
+    oldest: oldest[c] || null,
+  }))
+  // bottleneck: active flow column (not backlog/done) with the largest avg dwell
+  let bottleneck = null, maxD = 0
+  for (const c of ['in_progress', 'review', 'blocked']) {
+    if (avgDwell(c) > maxD && dwellN[c] > 0) { maxD = avgDwell(c); bottleneck = c }
+  }
+
+  return {
+    columns,
+    rework: { count: rework, detail: reworkDetail },
+    cycleTimeHours: ctN ? round1(ctSum / ctN) : null,
+    completedSampled: ctN,
+    bottleneck,
+    eventCount: events.length,
+  }
+}
+
+app.get('/api/projects/:id/flow', async (req, res) => {
+  try {
+    const { rows: tr } = await db.query('SELECT * FROM tasks WHERE project_id=$1', [req.params.id])
+    const { rows: er } = await db.query('SELECT * FROM task_events WHERE project_id=$1 ORDER BY at ASC', [req.params.id])
+    const events = er.map(e => ({ taskId: e.task_id, fromStatus: e.from_status, toStatus: e.to_status, at: e.at }))
+    res.json(computeFlow(tr.map(rowToTask), events))
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
