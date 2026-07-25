@@ -1885,42 +1885,74 @@ const DIGEST_COL_ZH = { todo: '待辦', in_progress: '進行中', review: '審�
 const BOTTLENECK_DWELL_H = 72 // only flag a column that has queued >3 days on average
 const fmtDwellZh = (h) => (h < 48 ? `${h}h` : `${Math.round(h / 24)}天`)
 
+// Decision-review nudge (v1.1). Pending decisions (no outcome) older than the review threshold
+// — the same signal DecisionLog.jsx highlights (REVIEW_DUE_DAYS = 7). GLOBAL, not scoped to
+// active projects: portfolio/life decisions often have no project at all, and closing the outcome
+// loop is the entire point of the Decision Log (calibration can't accrue without outcomes). Oldest
+// first. Returns Telegram markdown or ''.
+const DECISION_REVIEW_DAYS = 7
+const DIGEST_DOMAIN_ZH = { life: '人生', business: '事業' }
+const truncTitle = (s, n = 42) => { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s }
+
+async function buildDecisionReviewAlerts() {
+  const LIMIT = 5
+  const { rows } = await db.query(
+    `SELECT title, domain, created_at FROM decisions
+       WHERE outcome IS NULL AND created_at < NOW() - make_interval(days => $1::int)
+       ORDER BY created_at ASC`, [DECISION_REVIEW_DAYS])
+  if (!rows.length) return ''
+  const shown = rows.slice(0, LIMIT).map(r => {
+    const ageDays = Math.max(1, Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000))
+    const dom = r.domain ? ` (${DIGEST_DOMAIN_ZH[r.domain] || r.domain})` : ''
+    return `• ${truncTitle(r.title)}${dom} — ${ageDays}天未回填`
+  })
+  let out = '\n\n🧭 *決策待回填結果:*\n' + shown.join('\n')
+  if (rows.length > LIMIT) out += `\n_…還有 ${rows.length - LIMIT} 個_`
+  out += '\n_回填結果讓決策校準持續累積_'
+  return out
+}
+
 async function buildProactiveAlerts(projects, allTasks) {
-  if (!projects.length) return ''
   const ids = projects.map(p => p.id)
   const nameById = Object.fromEntries(projects.map(p => [p.id, p.name]))
   let out = ''
 
-  try {
-    const { rows } = await db.query(
-      `SELECT * FROM risks WHERE project_id = ANY($1::uuid[]) AND status <> 'closed'`, [ids])
-    const risks = rows.map(rowToRisk)
-      .filter(r => r.action === 'mitigate')
-      .sort((a, b) => b.severity - a.severity)
-      .slice(0, 4)
-    if (risks.length) {
-      out += '\n\n🔴 *需立即處理的風險:*\n' +
-        risks.map(r => `• *${nameById[r.projectId] || '?'}*: ${r.description}`).join('\n')
-    }
-  } catch (e) { console.warn('[digest] risk alerts failed:', e.message) }
+  if (projects.length) {
+    try {
+      const { rows } = await db.query(
+        `SELECT * FROM risks WHERE project_id = ANY($1::uuid[]) AND status <> 'closed'`, [ids])
+      const risks = rows.map(rowToRisk)
+        .filter(r => r.action === 'mitigate')
+        .sort((a, b) => b.severity - a.severity)
+        .slice(0, 4)
+      if (risks.length) {
+        out += '\n\n🔴 *需立即處理的風險:*\n' +
+          risks.map(r => `• *${nameById[r.projectId] || '?'}*: ${r.description}`).join('\n')
+      }
+    } catch (e) { console.warn('[digest] risk alerts failed:', e.message) }
 
-  try {
-    const { rows: er } = await db.query(
-      `SELECT * FROM task_events WHERE project_id = ANY($1::uuid[])`, [ids])
-    const evByProj = {}
-    for (const e of er) (evByProj[e.project_id] ||= []).push(
-      { taskId: e.task_id, fromStatus: e.from_status, toStatus: e.to_status, at: e.at })
-    const lines = []
-    for (const p of projects) {
-      const pt = allTasks.filter(t => t.projectId === p.id)
-      const flow = computeFlow(pt, evByProj[p.id] || [])
-      if (!flow.bottleneck) continue
-      const col = flow.columns.find(c => c.status === flow.bottleneck)
-      if (col && col.wip >= 2 && col.avgDwellHours >= BOTTLENECK_DWELL_H)
-        lines.push(`• *${p.name}*: ${col.wip} 個任務卡在「${DIGEST_COL_ZH[col.status] || col.status}」~${fmtDwellZh(col.avgDwellHours)}`)
-    }
-    if (lines.length) out += '\n\n⏳ *流動瓶頸:*\n' + lines.join('\n')
-  } catch (e) { console.warn('[digest] bottleneck alerts failed:', e.message) }
+    try {
+      const { rows: er } = await db.query(
+        `SELECT * FROM task_events WHERE project_id = ANY($1::uuid[])`, [ids])
+      const evByProj = {}
+      for (const e of er) (evByProj[e.project_id] ||= []).push(
+        { taskId: e.task_id, fromStatus: e.from_status, toStatus: e.to_status, at: e.at })
+      const lines = []
+      for (const p of projects) {
+        const pt = allTasks.filter(t => t.projectId === p.id)
+        const flow = computeFlow(pt, evByProj[p.id] || [])
+        if (!flow.bottleneck) continue
+        const col = flow.columns.find(c => c.status === flow.bottleneck)
+        if (col && col.wip >= 2 && col.avgDwellHours >= BOTTLENECK_DWELL_H)
+          lines.push(`• *${p.name}*: ${col.wip} 個任務卡在「${DIGEST_COL_ZH[col.status] || col.status}」~${fmtDwellZh(col.avgDwellHours)}`)
+      }
+      if (lines.length) out += '\n\n⏳ *流動瓶頸:*\n' + lines.join('\n')
+    } catch (e) { console.warn('[digest] bottleneck alerts failed:', e.message) }
+  }
+
+  // Global — runs even with zero active projects (standalone life/business decisions).
+  try { out += await buildDecisionReviewAlerts() }
+  catch (e) { console.warn('[digest] decision-review alerts failed:', e.message) }
 
   return out
 }
@@ -1935,19 +1967,9 @@ app.get('/api/ai/digest/preview', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-async function sendMorningDigest(force = false) {
-  const botToken = process.env.BOT_TOKEN
-  const chatId   = process.env.OWNER_TELEGRAM_ID
-  if (!botToken || !chatId) { console.warn('[digest] BOT_TOKEN or OWNER_TELEGRAM_ID not set'); return }
-
-  const { rows: projectRows } = await db.query(`SELECT * FROM projects WHERE status='active'`)
-  const projects = projectRows.map(rowToProject)
-  if (!projects.length) { console.log('[digest] no active projects, skipping'); return }
-
-  const { rows: taskRows } = await db.query('SELECT * FROM tasks')
-  const allTasks = taskRows.map(rowToTask)
-  const today = new Date().toISOString().split('T')[0]
-
+// Project-by-project morning summary (AI, with a plain fallback). Only meaningful when there are
+// active projects; sendMorningDigest calls it conditionally so a decisions-only digest can skip it.
+async function buildProjectSummaryText(projects, allTasks, today) {
   const summaries = projects.map(p => {
     const pt = allTasks.filter(t => t.projectId === p.id)
     const ip = pt.filter(t => t.status === 'in_progress').map(t => t.title)
@@ -1986,17 +2008,36 @@ Rules:
       return `• *${p.name}*: ${done}/${pt.length} done${ip ? `, ${ip} in progress` : ''}${bl ? `, ⚠️ ${bl} blocked` : ''}`
     }).join('\n')
   }
+  return text
+}
+
+async function sendMorningDigest(force = false) {
+  const botToken = process.env.BOT_TOKEN
+  const chatId   = process.env.OWNER_TELEGRAM_ID
+  if (!botToken || !chatId) { console.warn('[digest] BOT_TOKEN or OWNER_TELEGRAM_ID not set'); return }
+
+  const { rows: projectRows } = await db.query(`SELECT * FROM projects WHERE status='active'`)
+  const projects = projectRows.map(rowToProject)
+
+  const { rows: taskRows } = await db.query('SELECT * FROM tasks')
+  const allTasks = taskRows.map(rowToTask)
+  const today = new Date().toISOString().split('T')[0]
+
+  // Alerts first (includes the global decision-review nudge) so a decisions-only digest can still
+  // send when there are no active projects — life/portfolio outcomes must be closed regardless.
+  const alerts = await buildProactiveAlerts(projects, allTasks)
+  if (!projects.length && !alerts) { console.log('[digest] nothing to report (no active projects, no reviews due), skipping'); return }
+
+  const text = projects.length ? await buildProjectSummaryText(projects, allTasks, today) : ''
 
   const dateStr = new Date().toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'long', day: 'numeric', weekday: 'short' })
-
-  const alerts = await buildProactiveAlerts(projects, allTasks)
 
   const expiringKeys = loadVault().filter(e => e.expiry && daysUntil(e.expiry) <= 7)
   const keyWarning = expiringKeys.length
     ? '\n\n⚠️ *API Keys 即將到期:*\n' + expiringKeys.map(e => `• *${e.name}* — ${daysUntil(e.expiry) < 0 ? '已過期' : `${daysUntil(e.expiry)}天後到期`}`).join('\n')
     : ''
 
-  const msg = `📋 *AI PM 早安 — ${dateStr}*\n\n${text}${alerts}${keyWarning}`
+  const msg = `📋 *AI PM 早安 — ${dateStr}*${text ? `\n\n${text}` : ''}${alerts}${keyWarning}`
 
   const ok = await sendTelegram(msg)
   if (!ok) { console.error('[digest] Telegram send failed — not marking as sent'); return null }
