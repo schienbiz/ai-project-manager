@@ -68,6 +68,133 @@ const STORAGE_KIND = /supabase/i.test(_dbUrl.host) ? 'supabase'
   : /cockroachlabs|crdb|cockroach/i.test(_dbUrl.host) ? 'cockroachdb'
   : /neon/i.test(_dbUrl.host) ? 'neon' : 'postgres'
 
+// Built-in template scaffolds seeded once (ON CONFLICT DO NOTHING keyed on seed_key, so user
+// edits are preserved across restarts). Bodies are practical starting points, not filled docs.
+const TEMPLATE_SEEDS = [
+  { seedKey: 'prd', category: 'prd', name: '產品需求文件 (PRD)', body:
+`# 產品需求文件 (PRD)
+
+## 一句話描述
+（用一句話說清楚這個產品／功能）
+
+## 問題與目標
+- 要解決的問題：
+- 成功指標（可量化）：
+- 範圍外（不做什麼）：
+
+## 目標使用者
+- 主要對象：
+- 使用情境：
+
+## 需求
+1. 必須有 (P0)：
+2. 應該有 (P1)：
+3. 可以有 (P2)：
+
+## 風險與未知
+-
+
+## 里程碑
+- ` },
+  { seedKey: 'sop', category: 'sop', name: '標準作業程序 (SOP)', body:
+`# 標準作業程序 (SOP)
+
+## 適用範圍
+（什麼情況下使用這份 SOP）
+
+## 前置條件
+-
+
+## 步驟
+1.
+2.
+3.
+
+## 檢查點 / 驗收標準
+-
+
+## 例外處理
+-
+
+## 負責人 / 更新紀錄
+- ` },
+  { seedKey: 'meeting', category: 'meeting', name: '會議紀錄', body:
+`# 會議紀錄
+
+日期：
+出席：
+主題：
+
+## 討論重點
+-
+
+## 決議
+-
+
+## 行動項目 (Action Items)
+| 事項 | 負責人 | 期限 |
+|---|---|---|
+|  |  |  |
+
+## 下次會議
+- ` },
+  { seedKey: 'risk', category: 'risk', name: '風險登錄 (Risk Register)', body:
+`# 風險登錄 (Risk Register)
+
+| 風險 | 機率(高/中/低) | 影響(高/中/低) | 對策 | 負責人 | 狀態 |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+## 說明
+- 機率 × 影響 決定行動：高×高 = 立即緩解；不可逆 = 先驗證；其餘 = 監控 / 接受` },
+  { seedKey: 'budget', category: 'budget', name: '預算 (Budget)', body:
+`# 預算 (Budget)
+
+專案：
+期間：
+
+| 項目 | 類別 | 預估 | 實際 | 差異 | 備註 |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+## 總計
+- 預估總額：
+- 實際總額：
+- 結餘：
+
+## 假設 / 風險
+- ` },
+  { seedKey: 'bizplan', category: 'bizplan', name: '商業計畫 (Business Plan)', body:
+`# 商業計畫 (Business Plan)
+
+## 摘要
+（一段話：做什麼、給誰、為何會贏）
+
+## 問題 / 機會
+-
+
+## 解決方案 / 產品
+-
+
+## 市場
+- 規模 (TAM / SAM / SOM)：
+- 目標客群：
+- 競爭與差異化：
+
+## 商業模式
+- 收入來源：
+- 定價：
+- 單位經濟：
+
+## 執行計畫
+- 里程碑：
+- 團隊：
+- 資金需求：
+
+## 風險
+- ` },
+]
+
 async function initDb() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS projects (
@@ -176,6 +303,25 @@ async function initDb() {
   await db.query(`CREATE INDEX IF NOT EXISTS decisions_domain_idx  ON decisions (domain, category)`)
   await db.query(`CREATE INDEX IF NOT EXISTS decisions_project_idx ON decisions (project_id)`)
   await db.query(`CREATE INDEX IF NOT EXISTS decisions_outcome_idx ON decisions (outcome)`)
+  // Template Library — reusable document scaffolds (PRD/SOP/meeting/risk/budget/business plan).
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pm_templates (
+      id         UUID PRIMARY KEY,
+      name       TEXT NOT NULL DEFAULT '',
+      category   TEXT NOT NULL DEFAULT 'custom',
+      body       TEXT NOT NULL DEFAULT '',
+      builtin    BOOLEAN NOT NULL DEFAULT false,
+      seed_key   TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    )`)
+  for (const s of TEMPLATE_SEEDS) {
+    // ON CONFLICT (seed_key) DO NOTHING preserves user edits to built-ins across restarts.
+    await db.query(
+      `INSERT INTO pm_templates (id,name,category,body,builtin,seed_key,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,true,$5,$6,$6) ON CONFLICT (seed_key) DO NOTHING`,
+      [randomUUID(), s.name, s.category, s.body, s.seedKey, new Date().toISOString()])
+  }
   console.log('[db] schema ready')
 }
 
@@ -201,6 +347,13 @@ function rowToDecision(r) {
     verdict: r.verdict, assumptions: r.assumptions ?? [], analysisMd: r.analysis_md ?? '',
     outcome: r.outcome ?? null, outcomeNote: r.outcome_note ?? '', reviewedAt: r.reviewed_at ?? null,
     createdAt: r.created_at, updatedAt: r.updated_at,
+  }
+}
+
+function rowToTemplate(r) {
+  return {
+    id: r.id, name: r.name, category: r.category, body: r.body,
+    builtin: r.builtin, createdAt: r.created_at, updatedAt: r.updated_at,
   }
 }
 function rowToTask(r) {
@@ -1272,6 +1425,54 @@ app.get('/api/portfolio', async (req, res) => {
       unclassifiedProjects: projects.filter(p => !p.domain).length,
       totalProjects: projects.length,
     })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Template Library ──────────────────────────────────────────────────────────
+// Reusable document scaffolds. Built-ins ship seeded and are editable (customize in place) but
+// not deletable (delete would just re-seed on next restart). Custom templates are fully CRUD.
+app.get('/api/templates', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM pm_templates ORDER BY builtin DESC, updated_at DESC')
+    res.json(rows.map(rowToTemplate))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.post('/api/templates', async (req, res) => {
+  try {
+    const item = {
+      id: uid(),
+      name: (req.body.name || '未命名模板').slice(0, 120),
+      category: (req.body.category || 'custom').slice(0, 40),
+      body: req.body.body || '',
+    }
+    await db.query(
+      `INSERT INTO pm_templates (id,name,category,body,builtin,seed_key,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,false,NULL,$5,$5)`,
+      [item.id, item.name, item.category, item.body, now()])
+    const { rows } = await db.query('SELECT * FROM pm_templates WHERE id=$1', [item.id])
+    res.json(rowToTemplate(rows[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.put('/api/templates/:id', async (req, res) => {
+  try {
+    const b = req.body
+    const { rows } = await db.query(
+      `UPDATE pm_templates SET name=$1, category=$2, body=$3, updated_at=$4 WHERE id=$5 RETURNING *`,
+      [(b.name ?? '').slice(0, 120), (b.category ?? 'custom').slice(0, 40), b.body ?? '', now(), req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json(rowToTemplate(rows[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.delete('/api/templates/:id', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT builtin FROM pm_templates WHERE id=$1', [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    if (rows[0].builtin) return res.status(400).json({ error: 'Built-in templates cannot be deleted (edit instead)' })
+    await db.query('DELETE FROM pm_templates WHERE id=$1', [req.params.id])
+    res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 

@@ -34,6 +34,12 @@ export const api = {
   getDashboard:    () => fetch('/pm/api/dashboard').then(json),
   getPortfolio:    () => fetch('/pm/api/portfolio').then(json),
 
+  // Template Library
+  getTemplates:    () => fetch('/pm/api/templates').then(json),
+  createTemplate:  (data) => post('/pm/api/templates', data),
+  updateTemplate:  (id, data) => put(`/pm/api/templates/${id}`, data),
+  deleteTemplate:  (id) => del(`/pm/api/templates/${id}`),
+
   // Projects
   getProjects:     () => fetch('/pm/api/projects').then(json),
   getProject:      (id) => fetch(`/pm/api/projects/${id}`).then(json),

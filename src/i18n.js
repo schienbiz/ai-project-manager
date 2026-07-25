@@ -196,6 +196,22 @@ export const T = {
     pfUnclassified: (n) => `${n} project${n > 1 ? 's' : ''} not classified yet — click to assign a domain`,
     pfEmptyHint:    'Assign a domain (Life / Business) to your projects to see the portfolio roll-up.',
 
+    // Template Library
+    navTemplates:    '📄 Templates',
+    templatesTitle:  'Template Library',
+    templatesSub:    'Reusable scaffolds — start from a proven format instead of a blank page.',
+    tplNew:          '+ New template',
+    tplCopy:         'Copy',
+    tplCopied:       'Copied ✓',
+    tplSave:         'Save',
+    tplBuiltinBadge: 'Built-in',
+    tplNameLabel:    'Name',
+    tplCategoryLabel:'Category',
+    tplBodyLabel:    'Body (Markdown)',
+    tplDeleteConfirm:'Delete this template?',
+    tplEmpty:        'No templates.',
+    tplCat: { prd:'PRD', sop:'SOP', meeting:'Meeting', risk:'Risk', budget:'Budget', bizplan:'Business Plan', custom:'Custom' },
+
     // Task quick-done
     quickDoneLabel:   'Mark done',
     quickReopenLabel: 'Reopen',
@@ -453,6 +469,22 @@ export const T = {
     pfUnclassified: (n) => `${n} مشروع غير مصنّف بعد — انقر لتعيين المجال`,
     pfEmptyHint:    'عيّن مجالاً (حياة / أعمال) لمشاريعك لرؤية نظرة المحفظة.',
 
+    // مكتبة القوالب
+    navTemplates:    '📄 القوالب',
+    templatesTitle:  'مكتبة القوالب',
+    templatesSub:    'هياكل قابلة لإعادة الاستخدام — ابدأ من صيغة مجرّبة بدل صفحة فارغة.',
+    tplNew:          '+ قالب جديد',
+    tplCopy:         'نسخ',
+    tplCopied:       'تم النسخ ✓',
+    tplSave:         'حفظ',
+    tplBuiltinBadge: 'مضمّن',
+    tplNameLabel:    'الاسم',
+    tplCategoryLabel:'الفئة',
+    tplBodyLabel:    'المحتوى (Markdown)',
+    tplDeleteConfirm:'حذف هذا القالب؟',
+    tplEmpty:        'لا قوالب.',
+    tplCat: { prd:'PRD', sop:'SOP', meeting:'اجتماع', risk:'مخاطر', budget:'ميزانية', bizplan:'خطة عمل', custom:'مخصص' },
+
     // Task quick-done
     quickDoneLabel:   'تحديد كمكتمل',
     quickReopenLabel: 'إعادة فتح',
@@ -704,6 +736,22 @@ export const T = {
     pfOther:        '其他',
     pfUnclassified: (n) => `${n} 個專案尚未分類 — 點擊指定領域`,
     pfEmptyHint:    '為專案指定領域（人生／事業）即可看到組合層總覽。',
+
+    // 模板庫
+    navTemplates:    '📄 模板庫',
+    templatesTitle:  '模板庫',
+    templatesSub:    '可重複使用的骨架 —— 從成熟格式開始，而非空白頁。',
+    tplNew:          '+ 新模板',
+    tplCopy:         '複製',
+    tplCopied:       '已複製 ✓',
+    tplSave:         '儲存',
+    tplBuiltinBadge: '內建',
+    tplNameLabel:    '名稱',
+    tplCategoryLabel:'分類',
+    tplBodyLabel:    '內容 (Markdown)',
+    tplDeleteConfirm:'刪除這個模板？',
+    tplEmpty:        '尚無模板。',
+    tplCat: { prd:'PRD', sop:'SOP', meeting:'會議', risk:'風險', budget:'預算', bizplan:'商業計畫', custom:'自訂' },
 
     // Task quick-done
     quickDoneLabel:   '標記完成',
