@@ -1207,6 +1207,74 @@ app.get('/api/dashboard', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ── Portfolio roll-up (Life / Business) ───────────────────────────────────────
+// The zoom-out lens: activates the domain/category dimension by rolling projects + tasks +
+// pending decisions up per domain and category, so attention imbalance across Life vs Business
+// becomes visible. Tasks roll up via their project's domain; decisions roll up by their OWN
+// domain (standalone life/portfolio decisions have no project). Aggregation lives here so the
+// dashboard can't disagree with the Kanban/Decision panels.
+app.get('/api/portfolio', async (req, res) => {
+  try {
+    const [{ rows: pr }, { rows: tr }, { rows: dr }] = await Promise.all([
+      db.query('SELECT * FROM projects'),
+      db.query('SELECT * FROM tasks'),
+      db.query('SELECT domain, category, outcome FROM decisions'),
+    ])
+    const projects = pr.map(rowToProject)
+    const tasks = tr.map(rowToTask)
+    const today = new Date().toISOString().split('T')[0]
+    const tasksByProject = {}
+    for (const t of tasks) (tasksByProject[t.projectId] ||= []).push(t)
+
+    const emptyAgg = () => ({ activeProjects: 0, totalProjects: 0, inProgress: 0, blocked: 0, overdue: 0, done: 0, totalTasks: 0, pendingDecisions: 0 })
+    const domains = {}
+    const dget = (d) => (domains[d] ||= { ...emptyAgg(), categories: {} })
+    const cget = (dom, c) => (dom.categories[c] ||= emptyAgg())
+
+    for (const p of projects) {
+      const dom = dget(p.domain || 'unclassified')
+      const cat = cget(dom, p.category || '(uncategorized)')
+      const addProj = (a) => { a.totalProjects++; if (p.status === 'active') a.activeProjects++ }
+      addProj(dom); addProj(cat)
+      for (const t of (tasksByProject[p.id] || [])) {
+        const bump = (a) => {
+          a.totalTasks++
+          if (t.status === 'in_progress') a.inProgress++
+          else if (t.status === 'blocked') a.blocked++
+          else if (t.status === 'done') a.done++
+          if (t.dueDate && t.dueDate < today && t.status !== 'done') a.overdue++
+        }
+        bump(dom); bump(cat)
+      }
+    }
+
+    for (const d of dr) {
+      if (d.outcome != null) continue // only pending (unresolved) decisions
+      const dom = dget(d.domain || 'unclassified')
+      dom.pendingDecisions++
+      cget(dom, d.category || '(uncategorized)').pendingDecisions++
+    }
+
+    const order = ['life', 'business', 'unclassified']
+    const outDomains = order.filter(dk => domains[dk]).map(dk => {
+      const { categories, ...agg } = domains[dk]
+      return {
+        domain: dk === 'unclassified' ? null : dk,
+        ...agg,
+        categories: Object.entries(categories)
+          .map(([category, a]) => ({ category: category === '(uncategorized)' ? null : category, ...a }))
+          .sort((a, b) => b.activeProjects - a.activeProjects || b.totalProjects - a.totalProjects),
+      }
+    })
+
+    res.json({
+      domains: outDomains,
+      unclassifiedProjects: projects.filter(p => !p.domain).length,
+      totalProjects: projects.length,
+    })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 // ── AI system prompt ──────────────────────────────────────────────────────────
 function getPMSystem() {
   return `You are an expert AI project manager with 15 years of experience in software engineering, agile, and product strategy. You help teams plan, execute, and track projects with clarity. Be specific, actionable, and concise. Today's date: ${new Date().toISOString().split('T')[0]}.`

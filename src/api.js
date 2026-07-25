@@ -32,6 +32,7 @@ const json = (r) => r.json()
 export const api = {
   // Dashboard
   getDashboard:    () => fetch('/pm/api/dashboard').then(json),
+  getPortfolio:    () => fetch('/pm/api/portfolio').then(json),
 
   // Projects
   getProjects:     () => fetch('/pm/api/projects').then(json),

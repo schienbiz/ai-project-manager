@@ -183,6 +183,19 @@ export const T = {
     axisReversibility:'Reversibility', axisImpact:'Impact', axisUrgency:'Urgency',
     standaloneDecisionHint:'Portfolio / life decision (no project)',
 
+    // Portfolio roll-up
+    navPortfolio:   '🗂 Portfolio',
+    portfolioTitle: 'Portfolio',
+    portfolioSub:   'Where your attention goes across Life & Business.',
+    pfProjects:     'active',
+    pfInProg:       'in progress',
+    pfPending:      'to review',
+    pfNoWork:       'no active work',
+    pfStalled:      'active, none in progress',
+    pfOther:        'Other',
+    pfUnclassified: (n) => `${n} project${n > 1 ? 's' : ''} not classified yet — click to assign a domain`,
+    pfEmptyHint:    'Assign a domain (Life / Business) to your projects to see the portfolio roll-up.',
+
     // Task quick-done
     quickDoneLabel:   'Mark done',
     quickReopenLabel: 'Reopen',
@@ -427,6 +440,19 @@ export const T = {
     axisReversibility:'قابلية التراجع', axisImpact:'الأثر', axisUrgency:'الإلحاح',
     standaloneDecisionHint:'قرار محفظة / حياة (بلا مشروع)',
 
+    // نظرة المحفظة
+    navPortfolio:   '🗂 المحفظة',
+    portfolioTitle: 'المحفظة',
+    portfolioSub:   'أين تذهب طاقتك بين الحياة والأعمال.',
+    pfProjects:     'نشط',
+    pfInProg:       'قيد التنفيذ',
+    pfPending:      'للمراجعة',
+    pfNoWork:       'لا عمل نشط',
+    pfStalled:      'نشط، لا شيء قيد التنفيذ',
+    pfOther:        'أخرى',
+    pfUnclassified: (n) => `${n} مشروع غير مصنّف بعد — انقر لتعيين المجال`,
+    pfEmptyHint:    'عيّن مجالاً (حياة / أعمال) لمشاريعك لرؤية نظرة المحفظة.',
+
     // Task quick-done
     quickDoneLabel:   'تحديد كمكتمل',
     quickReopenLabel: 'إعادة فتح',
@@ -665,6 +691,19 @@ export const T = {
     reviewedCount:  (n) => `已驗 ${n} 筆`,
     axisReversibility:'可逆性', axisImpact:'影響', axisUrgency:'時效',
     standaloneDecisionHint:'組合／人生決策（無專案）',
+
+    // 組合層總覽
+    navPortfolio:   '🗂 組合',
+    portfolioTitle: '組合層總覽',
+    portfolioSub:   '你的注意力在人生與事業之間如何分配。',
+    pfProjects:     '進行中',
+    pfInProg:       '進行中任務',
+    pfPending:      '待回填',
+    pfNoWork:       '無進行中工作',
+    pfStalled:      '有專案但無進行中',
+    pfOther:        '其他',
+    pfUnclassified: (n) => `${n} 個專案尚未分類 — 點擊指定領域`,
+    pfEmptyHint:    '為專案指定領域（人生／事業）即可看到組合層總覽。',
 
     // Task quick-done
     quickDoneLabel:   '標記完成',
