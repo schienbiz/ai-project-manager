@@ -3,6 +3,14 @@ import { createContext, useContext } from 'react'
 export const LangContext = createContext({ lang: 'en', setLang: () => {} })
 export const useLang = () => useContext(LangContext)
 
+// Portfolio taxonomy. Category VALUES are stable keys (never localized) so switching UI
+// language never forks a category or breaks Decision-Log filtering; only the labels (t.cat) translate.
+export const DOMAIN_CATEGORIES = {
+  life:     ['health', 'family', 'learning', 'network'],
+  business: ['fnb', 'dubai', 'usmarket', 'investment'],
+}
+export const catLabel = (t, key) => (t.cat && t.cat[key]) || key
+
 export const T = {
   en: {
     // App / shared
@@ -148,6 +156,32 @@ export const T = {
     frameInputLabel:    'Feature / request to frame',
     framePlaceholder:   'e.g. Add a Gantt chart view to the Kanban board',
     allProjectsReportInfo: (n) => `Generating weekly report across all ${n} projects.`,
+
+    // Portfolio domain + Decision Log
+    domainLabel:    'Domain', domainLife: '🌱 Life', domainBusiness: '💼 Business', domainNone: 'Unclassified',
+    categoryLabel:  'Category', categoryNone: '—',
+    cat: { health:'Health', family:'Family', learning:'Learning', network:'Network',
+           fnb:'F&B', dubai:'Dubai Co.', usmarket:'US Market', investment:'Investment' },
+    navDecisions:   '🧭 Decisions',
+    decisionLogTitle: 'Decision Log',
+    decisionLogSub: 'Every decision & framing, kept — so your judgment compounds.',
+    decisionLogEmpty: 'No decisions logged yet. Use 🧭 Decide or 🎯 Frame on a project, or the New Decision button here.',
+    newDecision:    '+ New Decision',
+    filterAll:      'All',
+    kindDecide:'Decide', kindFrame:'Frame',
+    outcomePending:'⏳ Awaiting outcome', outcomeGood:'✅ Good', outcomeBad:'❌ Bad', outcomeMixed:'🟡 Mixed',
+    outcomeGoodShort:'Good', outcomeBadShort:'Bad', outcomeMixedShort:'Mixed',
+    recordOutcome:  'Record outcome',
+    outcomeNoteLabel:'What happened & what you learned',
+    saveOutcome:    'Save outcome',
+    clearOutcome:   'Reset to pending',
+    reviewNeeded:   'Review due',
+    assumptionsLabel:'Assumptions at the time',
+    deleteDecisionConfirm:'Delete this decision permanently?',
+    calibrationTitle:'🎯 Calibration',
+    reviewedCount:  (n) => `${n} reviewed`,
+    axisReversibility:'Reversibility', axisImpact:'Impact', axisUrgency:'Urgency',
+    standaloneDecisionHint:'Portfolio / life decision (no project)',
 
     // Task quick-done
     quickDoneLabel:   'Mark done',
@@ -367,6 +401,32 @@ export const T = {
     framePlaceholder:   'مثال: إضافة عرض مخطط جانت إلى لوحة كانبان',
     allProjectsReportInfo: (n) => `جاري إنشاء تقرير أسبوعي لجميع المشاريع الـ ${n}.`,
 
+    // المجال + سجل القرارات
+    domainLabel:    'المجال', domainLife: '🌱 الحياة', domainBusiness: '💼 الأعمال', domainNone: 'غير مصنّف',
+    categoryLabel:  'الفئة', categoryNone: '—',
+    cat: { health:'الصحة', family:'العائلة', learning:'التعلّم', network:'العلاقات',
+           fnb:'المطاعم', dubai:'شركة دبي', usmarket:'السوق الأمريكي', investment:'الاستثمار' },
+    navDecisions:   '🧭 القرارات',
+    decisionLogTitle: 'سجل القرارات',
+    decisionLogSub: 'كل قرار وتأطير محفوظ — لتتراكم حصافتك.',
+    decisionLogEmpty: 'لا قرارات بعد. استخدم 🧭 أو 🎯 داخل مشروع، أو زر قرار جديد هنا.',
+    newDecision:    '+ قرار جديد',
+    filterAll:      'الكل',
+    kindDecide:'قرار', kindFrame:'تأطير',
+    outcomePending:'⏳ بانتظار النتيجة', outcomeGood:'✅ جيد', outcomeBad:'❌ سيئ', outcomeMixed:'🟡 مختلط',
+    outcomeGoodShort:'جيد', outcomeBadShort:'سيئ', outcomeMixedShort:'مختلط',
+    recordOutcome:  'تسجيل النتيجة',
+    outcomeNoteLabel:'ماذا حدث وما تعلّمته',
+    saveOutcome:    'حفظ النتيجة',
+    clearOutcome:   'إعادة إلى الانتظار',
+    reviewNeeded:   'مراجعة مستحقة',
+    assumptionsLabel:'الافتراضات آنذاك',
+    deleteDecisionConfirm:'حذف هذا القرار نهائياً؟',
+    calibrationTitle:'🎯 المعايرة',
+    reviewedCount:  (n) => `${n} مُراجَع`,
+    axisReversibility:'قابلية التراجع', axisImpact:'الأثر', axisUrgency:'الإلحاح',
+    standaloneDecisionHint:'قرار محفظة / حياة (بلا مشروع)',
+
     // Task quick-done
     quickDoneLabel:   'تحديد كمكتمل',
     quickReopenLabel: 'إعادة فتح',
@@ -579,6 +639,32 @@ export const T = {
     frameInputLabel:    '要定義的功能／需求',
     framePlaceholder:   '例如：在看板加上甘特圖檢視',
     allProjectsReportInfo: (n) => `正在生成涵蓋全部 ${n} 個專案的週報。`,
+
+    // 組合分野 + 決策日誌
+    domainLabel:    '領域', domainLife: '🌱 人生', domainBusiness: '💼 事業', domainNone: '未分類',
+    categoryLabel:  '分類', categoryNone: '—',
+    cat: { health:'健康', family:'家庭', learning:'學習', network:'人脈',
+           fnb:'餐飲', dubai:'杜拜公司', usmarket:'美國市場', investment:'投資' },
+    navDecisions:   '🧭 決策日誌',
+    decisionLogTitle: '決策日誌',
+    decisionLogSub: '每個決策與定義都留存 —— 讓你的判斷力複利累積。',
+    decisionLogEmpty: '還沒有決策紀錄。在專案內用 🧭 決策 或 🎯 問題定義，或按這裡的「新決策」。',
+    newDecision:    '+ 新決策',
+    filterAll:      '全部',
+    kindDecide:'決策', kindFrame:'定義',
+    outcomePending:'⏳ 待驗結果', outcomeGood:'✅ 好', outcomeBad:'❌ 壞', outcomeMixed:'🟡 好壞參半',
+    outcomeGoodShort:'好', outcomeBadShort:'壞', outcomeMixedShort:'參半',
+    recordOutcome:  '記錄結果',
+    outcomeNoteLabel:'後來怎麼了，學到什麼',
+    saveOutcome:    '儲存結果',
+    clearOutcome:   '重設為待驗',
+    reviewNeeded:   '該回填了',
+    assumptionsLabel:'當時的假設',
+    deleteDecisionConfirm:'永久刪除這筆決策？',
+    calibrationTitle:'🎯 決策校準',
+    reviewedCount:  (n) => `已驗 ${n} 筆`,
+    axisReversibility:'可逆性', axisImpact:'影響', axisUrgency:'時效',
+    standaloneDecisionHint:'組合／人生決策（無專案）',
 
     // Task quick-done
     quickDoneLabel:   '標記完成',

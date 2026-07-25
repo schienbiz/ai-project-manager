@@ -88,10 +88,12 @@ export default function AIPanel({ project, tasks, allProjects, allTasks, onClose
       run('/pm/api/ai/parse-notes', { content: notesText, projectName: project.name, lang })
     } else if (tab === 'decide') {
       if (!decideText.trim()) return
-      run('/pm/api/ai/decide', { decision: decideText, context: project.goal || project.description || '', lang })
+      run('/pm/api/ai/decide', { decision: decideText, context: project.goal || project.description || '', lang,
+        projectId: project.id, domain: project.domain, category: project.category })
     } else if (tab === 'frame') {
       if (!frameText.trim()) return
-      run('/pm/api/ai/frame', { request: frameText, context: project.goal || project.description || '', lang })
+      run('/pm/api/ai/frame', { request: frameText, context: project.goal || project.description || '', lang,
+        projectId: project.id, domain: project.domain, category: project.category })
     }
   }
 

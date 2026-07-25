@@ -81,6 +81,13 @@ export const api = {
   // AI helpers
   estimateTask:     (data) => post('/pm/api/ai/estimate', data),
   translateFields:  (data) => post('/pm/api/ai/translate-fields', data),
+
+  // Decision Log
+  getDecisions:       (q = {}) => fetch('/pm/api/decisions?' + new URLSearchParams(q)).then(json),
+  getDecision:        (id) => fetch(`/pm/api/decisions/${id}`).then(json),
+  setDecisionOutcome: (id, data) => put(`/pm/api/decisions/${id}/outcome`, data),
+  deleteDecision:     (id) => del(`/pm/api/decisions/${id}`),
+  getCalibration:     (domain = '') => fetch('/pm/api/decisions/stats/calibration' + (domain ? `?domain=${domain}` : '')).then(json),
 }
 
 function post(url, data) {

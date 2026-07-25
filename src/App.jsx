@@ -8,6 +8,7 @@ import ProjectForm from './components/ProjectForm.jsx'
 import AdminDashboard from './components/AdminDashboard.jsx'
 import MarketingApp from './components/MarketingApp.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
+import DecisionLog from './components/DecisionLog.jsx'
 
 export default function App() {
   const [lang, setLang] = useState(() => localStorage.getItem('lang') || 'en')
@@ -193,6 +194,7 @@ export default function App() {
         onDashboard={() => setView('dashboard')}
         onAdmin={() => setView('admin')}
         onMarketing={() => setView('marketing')}
+        onDecisions={() => setView('decisions')}
         onNewProject={() => { setEditingProject(null); setShowProjectForm(true) }}
         view={view}
         collapsed={sidebarCollapsed}
@@ -206,6 +208,10 @@ export default function App() {
 
         {view === 'marketing' && (
           <MarketingApp onBack={() => setView('dashboard')} />
+        )}
+
+        {view === 'decisions' && (
+          <DecisionLog projects={projects} />
         )}
 
         {view === 'dashboard' && (

@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { execSync } from 'child_process'
+import net from 'net'
 import { fetch as undiciFetch } from 'undici'
 import express from 'express'
 import OpenAI from 'openai'
@@ -143,6 +144,38 @@ async function initDb() {
       last_digest_at TIMESTAMPTZ
     )`)
   await db.query(`INSERT INTO digest_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING`)
+  // Portfolio domain (Life vs Business) — nullable so existing projects stay unclassified (zero regression).
+  await db.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS domain   TEXT`)
+  await db.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT ''`)
+  // Decision Log — persists /decide + /frame so judgment compounds instead of being thrown away.
+  // We store the RAW axes (impact/reversibility/urgency) + assumptions, not just the markdown, so
+  // outcomes can later be scored against them (calibration). project_id is NULLABLE: portfolio- and
+  // life-level decisions have no project.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS decisions (
+      id            UUID PRIMARY KEY,
+      project_id    UUID,
+      domain        TEXT,
+      category      TEXT NOT NULL DEFAULT '',
+      kind          TEXT NOT NULL DEFAULT 'decide',
+      title         TEXT NOT NULL DEFAULT '',
+      input         TEXT NOT NULL DEFAULT '',
+      context       TEXT NOT NULL DEFAULT '',
+      impact        TEXT,
+      reversibility TEXT,
+      urgency       TEXT,
+      verdict       TEXT NOT NULL DEFAULT '',
+      assumptions   JSONB NOT NULL DEFAULT '[]',
+      analysis_md   TEXT NOT NULL DEFAULT '',
+      outcome       TEXT,
+      outcome_note  TEXT NOT NULL DEFAULT '',
+      reviewed_at   TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ NOT NULL,
+      updated_at    TIMESTAMPTZ NOT NULL
+    )`)
+  await db.query(`CREATE INDEX IF NOT EXISTS decisions_domain_idx  ON decisions (domain, category)`)
+  await db.query(`CREATE INDEX IF NOT EXISTS decisions_project_idx ON decisions (project_id)`)
+  await db.query(`CREATE INDEX IF NOT EXISTS decisions_outcome_idx ON decisions (outcome)`)
   console.log('[db] schema ready')
 }
 
@@ -152,8 +185,21 @@ function rowToProject(r) {
     id: r.id, name: r.name, description: r.description, goal: r.goal,
     userGuide: r.user_guide ?? '',
     status: r.status, priority: r.priority,
+    domain: r.domain ?? null, category: r.category ?? '',
     startDate: r.start_date, dueDate: r.due_date,
     tags: r.tags,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  }
+}
+
+function rowToDecision(r) {
+  return {
+    id: r.id, projectId: r.project_id ?? null,
+    domain: r.domain ?? null, category: r.category ?? '',
+    kind: r.kind, title: r.title, input: r.input, context: r.context,
+    impact: r.impact ?? null, reversibility: r.reversibility ?? null, urgency: r.urgency ?? null,
+    verdict: r.verdict, assumptions: r.assumptions ?? [], analysisMd: r.analysis_md ?? '',
+    outcome: r.outcome ?? null, outcomeNote: r.outcome_note ?? '', reviewedAt: r.reviewed_at ?? null,
     createdAt: r.created_at, updatedAt: r.updated_at,
   }
 }
@@ -493,6 +539,8 @@ app.post('/api/projects', async (req, res) => {
       userGuide: req.body.userGuide || '',
       status:   VALID_PROJECT_STATUS.has(req.body.status)     ? req.body.status   : 'active',
       priority: VALID_PROJECT_PRIORITY.has(req.body.priority) ? req.body.priority : 'medium',
+      domain:   normDomain(req.body.domain),
+      category: normCategory(req.body.category),
       startDate: req.body.startDate || null,
       dueDate: req.body.dueDate || null,
       tags: req.body.tags || [],
@@ -500,10 +548,10 @@ app.post('/api/projects', async (req, res) => {
       updatedAt: now(),
     }
     await db.query(
-      `INSERT INTO projects (id,name,description,goal,user_guide,status,priority,start_date,due_date,tags,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      `INSERT INTO projects (id,name,description,goal,user_guide,status,priority,domain,category,start_date,due_date,tags,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [item.id, item.name, item.description, item.goal, item.userGuide, item.status, item.priority,
-       item.startDate, item.dueDate, JSON.stringify(item.tags), item.createdAt, item.updatedAt]
+       item.domain, item.category, item.startDate, item.dueDate, JSON.stringify(item.tags), item.createdAt, item.updatedAt]
     )
     res.json(item)
   } catch (err) { res.status(500).json({ error: err.message }) }
@@ -601,9 +649,10 @@ app.put('/api/projects/:id', async (req, res) => {
     const { rows } = await db.query(
       `UPDATE projects SET
          name=$1, description=$2, goal=$3, user_guide=$4, status=$5, priority=$6,
-         start_date=$7, due_date=$8, tags=$9, updated_at=$10
-       WHERE id=$11 RETURNING *`,
+         domain=$7, category=$8, start_date=$9, due_date=$10, tags=$11, updated_at=$12
+       WHERE id=$13 RETURNING *`,
       [b.name, b.description ?? '', b.goal ?? '', b.userGuide ?? '', b.status ?? 'active', b.priority ?? 'medium',
+       normDomain(b.domain), normCategory(b.category),
        b.startDate ?? null, b.dueDate ?? null,
        JSON.stringify(b.tags ?? []), now(), req.params.id]
     )
@@ -618,6 +667,8 @@ app.delete('/api/projects/:id', async (req, res) => {
     await db.query('DELETE FROM risks WHERE project_id=$1', [req.params.id])
     await db.query('DELETE FROM task_events WHERE project_id=$1', [req.params.id])
     await db.query('DELETE FROM tasks WHERE project_id=$1', [req.params.id])
+    // Decisions outlive the project they were made in — orphan them, don't destroy the judgment record.
+    await db.query('UPDATE decisions SET project_id=NULL WHERE project_id=$1', [req.params.id])
     await db.query('DELETE FROM projects WHERE id=$1', [req.params.id])
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
@@ -647,6 +698,9 @@ const VALID_TASK_STATUS   = new Set(['todo', 'in_progress', 'done', 'cancelled']
 const VALID_TASK_PRIORITY = new Set(['low', 'medium', 'high', 'urgent'])
 const VALID_PROJECT_STATUS   = new Set(['active', 'paused', 'completed', 'archived'])
 const VALID_PROJECT_PRIORITY = new Set(['low', 'medium', 'high', 'urgent'])
+const VALID_DOMAIN           = new Set(['life', 'business'])
+const normDomain   = (d) => (VALID_DOMAIN.has(d) ? d : null)   // anything else → unclassified
+const normCategory = (c) => (typeof c === 'string' ? c.slice(0, 60) : '')
 
 // Append a status-transition row for flow metrics. Fire-and-forget: metrics are
 // non-critical, so a logging failure must never break task create/update.
@@ -1425,6 +1479,23 @@ function buildDecideMd(d, verdict, lang) {
   return md.trim()
 }
 
+// Persist a decision so judgment compounds. Stores the RAW axes + assumptions (not only the
+// markdown) so outcomes can be scored against the original call later. Awaited (never
+// fire-and-forget) so a failed insert surfaces instead of silently dropping the record.
+async function persistDecision(d) {
+  const id = uid(), ts = now()
+  await db.query(
+    `INSERT INTO decisions
+       (id,project_id,domain,category,kind,title,input,context,impact,reversibility,urgency,verdict,assumptions,analysis_md,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+    [id, d.projectId || null, normDomain(d.domain), normCategory(d.category), d.kind,
+     (d.input || '').slice(0, 200), d.input || '', d.context || '',
+     d.impact || null, d.reversibility || null, d.urgency || null,
+     d.verdict || '', JSON.stringify(d.assumptions || []), d.analysisMd || '', ts, ts]
+  )
+  return id
+}
+
 app.post('/api/ai/decide', async (req, res) => {
   const { decision, context, lang } = req.body
   if (!decision || !decision.trim()) return res.status(400).json({ error: 'decision required' })
@@ -1454,7 +1525,18 @@ Context: ${context || 'None'}`
     let d
     try { d = JSON.parse(match[0]) } catch { return streamPrebuilt(res, jsonFallback(text, lang)) }
     const verdict = decideVerdict(d.impact, d.reversibility, d.urgency, lang)
-    return streamPrebuilt(res, buildDecideMd(d, verdict, lang))
+    const md = buildDecideMd(d, verdict, lang)
+    try {
+      const decisionId = await persistDecision({
+        projectId: req.body.projectId, domain: req.body.domain, category: req.body.category,
+        kind: 'decide', input: decision, context: context || '',
+        impact: d.impact, reversibility: d.reversibility, urgency: d.urgency,
+        verdict, assumptions: d.keyUnknowns, analysisMd: md,
+      })
+      res.setHeader('X-Decision-Id', decisionId)
+      res.setHeader('Access-Control-Expose-Headers', 'X-Decision-Id')
+    } catch (e) { console.error('[decide] persist failed:', e.message) }
+    return streamPrebuilt(res, md)
   } catch (err) {
     return streamPrebuilt(res, `⚠️ ${err.message}`)
   }
@@ -1511,10 +1593,116 @@ Context: ${context || 'None'}`
     if (!match) return streamPrebuilt(res, jsonFallback(text, lang))
     let d
     try { d = JSON.parse(match[0]) } catch { return streamPrebuilt(res, jsonFallback(text, lang)) }
-    return streamPrebuilt(res, buildFrameMd(d, lang))
+    const md = buildFrameMd(d, lang)
+    try {
+      const decisionId = await persistDecision({
+        projectId: req.body.projectId, domain: req.body.domain, category: req.body.category,
+        kind: 'frame', input: request, context: context || '',
+        verdict: d.recommendation, assumptions: (d.alternatives || []).map(a => a.name).filter(Boolean),
+        analysisMd: md,
+      })
+      res.setHeader('X-Decision-Id', decisionId)
+      res.setHeader('Access-Control-Expose-Headers', 'X-Decision-Id')
+    } catch (e) { console.error('[frame] persist failed:', e.message) }
+    return streamPrebuilt(res, md)
   } catch (err) {
     return streamPrebuilt(res, `⚠️ ${err.message}`)
   }
+})
+
+// ── Decision Log ──────────────────────────────────────────────────────────────
+// The compounding asset: every /decide and /frame lands here so past judgment can be
+// reviewed, and — once outcomes are filled in — the decision-maker can be calibrated.
+const VALID_OUTCOME = new Set(['good', 'bad', 'mixed'])
+
+app.get('/api/decisions', async (req, res) => {
+  try {
+    const { domain, category, outcome, projectId, kind } = req.query
+    const where = [], vals = []
+    const add = (sql, v) => { vals.push(v); where.push(sql.replace('?', `$${vals.length}`)) }
+    if (domain)    add('domain = ?', domain)
+    if (category)  add('category = ?', category)
+    if (kind)      add('kind = ?', kind)
+    if (projectId) add('project_id = ?', projectId)
+    if (outcome === 'pending') where.push('outcome IS NULL')
+    else if (outcome)          add('outcome = ?', outcome)
+    const sql = `SELECT * FROM decisions${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT 500`
+    const { rows } = await db.query(sql, vals)
+    res.json(rows.map(rowToDecision))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/decisions/:id', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM decisions WHERE id=$1', [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json(rowToDecision(rows[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// Close the learning loop: record what actually happened + what was learned.
+app.put('/api/decisions/:id/outcome', async (req, res) => {
+  const { outcome, outcomeNote } = req.body
+  if (outcome != null && !VALID_OUTCOME.has(outcome))
+    return res.status(400).json({ error: 'outcome must be good | bad | mixed | null' })
+  try {
+    const reviewedAt = outcome == null ? null : now()
+    const { rows } = await db.query(
+      `UPDATE decisions SET outcome=$1, outcome_note=$2, reviewed_at=$3, updated_at=$4 WHERE id=$5 RETURNING *`,
+      [outcome ?? null, typeof outcomeNote === 'string' ? outcomeNote : '', reviewedAt, now(), req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json(rowToDecision(rows[0]))
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.delete('/api/decisions/:id', async (req, res) => {
+  try {
+    await db.query('DELETE FROM decisions WHERE id=$1', [req.params.id])
+    res.json({ ok: true })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// Calibration read-model: of the decisions whose outcomes are known, how often was each
+// reversibility / impact call vindicated? This is the systems-thinking meta-layer —
+// grading your own decision engine. Only counts reviewed decisions (outcome present).
+app.get('/api/decisions/stats/calibration', async (req, res) => {
+  try {
+    const { domain } = req.query
+    // Only /decide rows carry impact/reversibility/urgency — /frame has no axes, so calibrating it
+    // on those axes is meaningless and would pollute the 'unclassified' buckets. Exclude it here.
+    const vals = []
+    let sql = `SELECT impact, reversibility, urgency, outcome FROM decisions WHERE outcome IS NOT NULL AND kind='decide'`
+    if (domain) { vals.push(domain); sql += ` AND domain=$1` }
+    const { rows } = await db.query(sql, vals)
+    const bucket = () => ({ n: 0, good: 0, bad: 0, mixed: 0 })
+    const group = (key) => {
+      const out = {}
+      for (const r of rows) {
+        const k = r[key] || 'unclassified'
+        ;(out[k] ||= bucket()).n++
+        if (r.outcome in out[k]) out[k][r.outcome]++
+      }
+      return out
+    }
+    const reviewed = rows.length
+    const rev = group('reversibility')
+    const rate = (b) => (b && b.n ? Math.round((b.good / b.n) * 100) : null)
+    const ow = rate(rev['one-way']), tw = rate(rev['reversible'])
+    let insight = ''
+    if (reviewed < 5) {
+      insight = `Only ${reviewed} reviewed decision(s) — record more outcomes to unlock calibration.`
+    } else if (ow != null && tw != null) {
+      insight = `One-way calls hit ${ow}% good; reversible ${tw}%. ` +
+        (ow < tw ? 'Your slow, irreversible bets fare worse — watch for analysis paralysis / over-caution.'
+                 : 'Your irreversible bets hold up — the deliberation is paying off.')
+    } else if (ow != null) {
+      insight = `One-way (irreversible) calls hit ${ow}% good across ${rev['one-way'].n}. No reversible calls reviewed yet to compare.`
+    } else if (tw != null) {
+      insight = `Reversible calls hit ${tw}% good across ${rev['reversible'].n}. Log some one-way (irreversible) outcomes to compare.`
+    }
+    res.json({ reviewed, byReversibility: group('reversibility'), byImpact: group('impact'), byUrgency: group('urgency'), insight })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 // ── AI Team Agents ────────────────────────────────────────────────────────────
@@ -1656,6 +1844,11 @@ async function sendTelegram(text) {
   const chatId   = process.env.OWNER_TELEGRAM_ID
   if (!botToken || !chatId) { console.warn('[telegram] BOT_TOKEN/OWNER_TELEGRAM_ID not set'); return false }
   const _fetch = customFetch ?? fetch
+  // Tag every message as the AI-PM system so it's clearly distinguishable from
+  // Relationship OS in the shared Telegram bot (id lives in .env). Plain header line
+  // (no Markdown-special chars) so it renders identically in the plain-text
+  // fallback path below.
+  const tagged = `🗂 AI-PM\n${text}`
   const post = async (body) => {
     const r = await _fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
@@ -1666,10 +1859,10 @@ async function sendTelegram(text) {
     return { ok: r.ok && data.ok === true, status: r.status, desc: data.description }
   }
   try {
-    let res = await post({ chat_id: chatId, text, parse_mode: 'Markdown' })
+    let res = await post({ chat_id: chatId, text: tagged, parse_mode: 'Markdown' })
     if (!res.ok && /parse|entit/i.test(res.desc || '')) {
       console.warn(`[telegram] markdown parse failed (${res.desc}) — resending as plain text`)
-      res = await post({ chat_id: chatId, text })
+      res = await post({ chat_id: chatId, text: tagged })
     }
     if (!res.ok) console.error(`[telegram] send failed: ${res.status} ${res.desc}`)
     return res.ok
@@ -1870,7 +2063,10 @@ app.get('/api/status', async (req, res) => {
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 const ADMIN_SERVICES = [
-  { name: 'Relationship OS',  label: 'com.relationship-os.dev',    port: 3000, path: '/health' },
+  // ROS is TCP-probed (probe:'tcp'), NOT HTTP /health — ROS's /health runs
+  // SELECT 1 on Neon, so an open dashboard polling it would wake Neon compute
+  // (the 2026-06-20 keepalive burn). Port listening = ROS past DB init = serving.
+  { name: 'Relationship OS',  label: 'com.relationship-os.dev',    port: 3000, path: '/health', probe: 'tcp' },
   { name: 'Proxy',            label: 'com.proxy.marketing',         port: 3002, path: '/' },
   { name: 'AI Learning Tool', label: 'com.ai-learning-tool.dev',    port: 3003, path: '/health' },
   { name: 'AI PM',            label: 'com.ai-project-manager.dev',  port: 3004, path: '/pm/api/status' },
@@ -1878,6 +2074,41 @@ const ADMIN_SERVICES = [
 ]
 
 const ALLOWED_LABELS = new Set(ADMIN_SERVICES.map(s => s.label))
+
+// Probe a local service for the admin dashboard / diagnostics. Services flagged
+// `probe:'tcp'` (currently ROS) get a bare TCP connect instead of an HTTP GET —
+// see the ADMIN_SERVICES note above. A listening port = service bound = truly
+// serving, the same signal the ROS heartbeat (HC_PING_URL_ROS) deliberately uses.
+// Non-blocking (no execSync), safe for a frequently-polled endpoint.
+function tcpProbe(host, port, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    const sock = new net.Socket()
+    let done = false
+    const finish = (ok) => { if (done) return; done = true; sock.destroy(); resolve(ok) }
+    sock.setTimeout(timeoutMs)
+    sock.once('connect', () => finish(true))
+    sock.once('timeout', () => finish(false))
+    sock.once('error', () => finish(false))
+    sock.connect(port, host)
+  })
+}
+
+async function probeLocalService(svc) {
+  const t0 = Date.now()
+  if (svc.probe === 'tcp') {
+    const ok = await tcpProbe('localhost', svc.port, 4000)
+    return { ...svc, status: ok ? 200 : 0, latency: Date.now() - t0, healthy: ok }
+  }
+  try {
+    const r = await Promise.race([
+      fetch(`http://localhost:${svc.port}${svc.path}`),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+    ])
+    return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 400 }
+  } catch {
+    return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
+  }
+}
 
 // ── ATung Mac services (polled via Tailscale) ─────────────────────────────────
 const ATUNG_SERVICES = [
@@ -2622,19 +2853,9 @@ app.get('/api/admin/status', requireAdmin, async (req, res) => {
   // tab can no longer wake the fleet; the flat 60s throttle just avoids spamming the CF edge.
   maybeRefreshRenderCache()
 
-  // Local services: fast localhost polls (≤4s timeout, run in parallel)
-  const services = await Promise.all(ADMIN_SERVICES.map(async (svc) => {
-    const t0 = Date.now()
-    try {
-      const r = await Promise.race([
-        fetch(`http://localhost:${svc.port}${svc.path}`),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
-      ])
-      return { ...svc, status: r.status, latency: Date.now() - t0, healthy: r.status < 400 }
-    } catch {
-      return { ...svc, status: 0, latency: Date.now() - t0, healthy: false }
-    }
-  }))
+  // Local services: fast localhost polls (≤4s timeout, run in parallel). ROS is
+  // TCP-probed (probe:'tcp') so an open dashboard never wakes its Neon via /health.
+  const services = await Promise.all(ADMIN_SERVICES.map(probeLocalService))
 
   // ATung Mac services: polled via Tailscale (5s timeout — cross-machine)
   const atungServices = await Promise.all(ATUNG_SERVICES.map(async (svc) => {
@@ -3026,21 +3247,9 @@ app.post('/api/admin/audit', requireAdmin, async (req, res) => {
   try {
     step('🔍 Checking local services (chusMBp)...')
     const localResults = await Promise.all(ADMIN_SERVICES.map(async (svc) => {
-      const t0 = Date.now()
-      try {
-        const r = await Promise.race([
-          fetch(`http://localhost:${svc.port}${svc.path}`),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
-        ])
-        const latency = Date.now() - t0
-        const healthy = r.status < 400
-        step(`${healthy ? '✅' : '❌'} ${svc.name} (:${svc.port}) — ${r.status} (${latency}ms)`)
-        return { ...svc, status: r.status, latency, healthy }
-      } catch {
-        const latency = Date.now() - t0
-        step(`❌ ${svc.name} (:${svc.port}) — unreachable`)
-        return { ...svc, status: 0, latency, healthy: false }
-      }
+      const rec = await probeLocalService(svc)
+      step(`${rec.healthy ? '✅' : '❌'} ${svc.name} (:${svc.port}) — ${rec.healthy ? `${rec.status} (${rec.latency}ms)` : 'unreachable'}`)
+      return rec
     }))
 
     step('🌐 Checking Render services (API state, no keepalive)...')

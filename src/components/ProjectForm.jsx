@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useLang } from '../i18n.js'
+import { useLang, DOMAIN_CATEGORIES, catLabel } from '../i18n.js'
 import { api } from '../api.js'
 
 export default function ProjectForm({ project, onSave, onClose }) {
@@ -11,6 +11,8 @@ export default function ProjectForm({ project, onSave, onClose }) {
     userGuide:   project?.userGuide   || '',
     status:      project?.status      || 'active',
     priority:    project?.priority    || 'medium',
+    domain:      project?.domain      || '',
+    category:    project?.category    || '',
     startDate:   project?.startDate   || '',
     dueDate:     project?.dueDate     || '',
   })
@@ -93,6 +95,25 @@ export default function ProjectForm({ project, onSave, onClose }) {
                   <option value="medium">{t.priorityMedium}</option>
                   <option value="high">{t.priorityHigh}</option>
                   <option value="urgent">{t.priorityUrgent}</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>{t.domainLabel}</label>
+                <select value={form.domain} onChange={e => setForm(f => ({ ...f, domain: e.target.value, category: '' }))}>
+                  <option value="">{t.domainNone}</option>
+                  <option value="life">{t.domainLife}</option>
+                  <option value="business">{t.domainBusiness}</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>{t.categoryLabel}</label>
+                <select value={form.category} onChange={e => set('category', e.target.value)} disabled={!form.domain}>
+                  <option value="">{t.categoryNone}</option>
+                  {(DOMAIN_CATEGORIES[form.domain] || []).map(c => (
+                    <option key={c} value={c}>{catLabel(t, c)}</option>
+                  ))}
                 </select>
               </div>
             </div>
