@@ -25,7 +25,7 @@ import nodemailer from 'nodemailer'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from 'crypto'
+import { randomUUID, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'crypto'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import pg from 'pg'
@@ -658,10 +658,22 @@ app.use(cors())
 app.use(express.json({ limit: '2mb' }))
 
 // ── Admin auth ────────────────────────────────────────────────────────────────
+// Fail-CLOSED: if ADMIN_TOKEN is unset, every /api/admin/* route is locked (503),
+// never wide open. The old `if (!_adminToken) return next()` meant a single missing
+// env var silently exposed vault-reveal (plaintext secrets), service restart, the
+// LaunchAgent file rewriter, and Gmail send. A misconfig must lock us out, not open us up.
 const _adminToken = process.env.ADMIN_TOKEN
+if (!_adminToken) {
+  console.error('[SECURITY] ADMIN_TOKEN is not set — all /api/admin/* routes are LOCKED (503, fail-closed). Set ADMIN_TOKEN to enable admin access.')
+}
+function tokenMatches(provided) {
+  if (typeof provided !== 'string' || provided.length !== _adminToken.length) return false
+  // Constant-time compare (equal lengths guaranteed above so the buffers match).
+  return timingSafeEqual(Buffer.from(provided), Buffer.from(_adminToken))
+}
 function requireAdmin(req, res, next) {
-  if (!_adminToken) return next()
-  if (req.headers['x-admin-token'] === _adminToken) return next()
+  if (!_adminToken) return res.status(503).json({ error: 'Admin disabled: ADMIN_TOKEN not configured on server' })
+  if (tokenMatches(req.headers['x-admin-token'])) return next()
   res.status(401).json({ error: 'Unauthorized' })
 }
 
