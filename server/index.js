@@ -2843,8 +2843,14 @@ function loadVault() {
 }
 
 function saveVault(entries) {
-  fs.mkdirSync(path.dirname(VAULT_PATH), { recursive: true })
-  fs.writeFileSync(VAULT_PATH, JSON.stringify(entries, null, 2))
+  const dir = path.dirname(VAULT_PATH)
+  fs.mkdirSync(dir, { recursive: true })
+  // Atomic write: a bare writeFileSync can leave a truncated file if the process
+  // dies mid-write, and loadVault() would then parse-fail and return [] — the vault
+  // would silently appear empty. Write a temp file, then rename (atomic on same fs).
+  const tmp = path.join(dir, `.vault.${process.pid}.${Date.now()}.tmp`)
+  fs.writeFileSync(tmp, JSON.stringify(entries, null, 2))
+  fs.renameSync(tmp, VAULT_PATH)
 }
 
 app.get('/api/admin/vault', requireAdmin, (req, res) => {
@@ -3345,6 +3351,20 @@ app.post('/api/admin/agent-optimize/preview', requireAdmin, async (req, res) => 
   }
 })
 
+// Replace a model id ONLY where it appears as a complete quoted string literal
+// ('id' / "id" / `id`), never as a substring of a longer id — replacing "gpt-4"
+// must not corrupt "gpt-4-turbo". split/join avoids regex-escaping the slashes,
+// dots and dashes common in model ids. Returns {changed} so the caller can skip
+// (not silently no-op) when the quoted form isn't present.
+function replaceQuotedModel(content, oldId, newId) {
+  let out = content, changed = false
+  for (const q of ["'", '"', '`']) {
+    const needle = q + oldId + q
+    if (out.includes(needle)) { out = out.split(needle).join(q + newId + q); changed = true }
+  }
+  return { out, changed }
+}
+
 app.post('/api/admin/agent-optimize', requireAdmin, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
@@ -3416,14 +3436,14 @@ app.post('/api/admin/agent-optimize', requireAdmin, async (req, res) => {
         continue
       }
       let content = fs.readFileSync(svc.file, 'utf-8')
-      if (!content.includes(action.old_model)) {
-        step(`⚠️ ${action.service} / ${action.provider}：找不到 "${action.old_model}"，跳過`)
+      const { out: updated, changed } = replaceQuotedModel(content, action.old_model, action.new_model)
+      if (!changed) {
+        step(`⚠️ ${action.service} / ${action.provider}：找不到帶引號的字串 "${action.old_model}"，跳過`)
         skipped.push(action.service)
         continue
       }
       const bakPath = svc.file + '.bak'
       fs.writeFileSync(bakPath, content, 'utf-8')
-      const updated = content.replaceAll(action.old_model, action.new_model)
       fs.writeFileSync(svc.file, updated, 'utf-8')
       try {
         execSync(`node --check "${svc.file}"`, { timeout: 5000 })
