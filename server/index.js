@@ -522,7 +522,13 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
     return null
   }
   const client = makeClient(p)
+  // Abort the in-flight HTTP request when the timeout wins the race — otherwise the
+  // underlying call keeps running to the SDK's own 15s timeout, and multiGenerate's
+  // all-timeout fallback re-issues a SECOND request to the same provider while the
+  // first is still burning tokens. The signal ties the request to our p.timeout.
+  const ac = new AbortController()
   let done = false
+  let timer = null
   try {
     return await Promise.race([
       (async () => {
@@ -533,19 +539,21 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
           temperature: 0.7,
           stream: false,
           ...(p.extraParams || {}),
-        })
+        }, { signal: ac.signal })
         done = true
         const s = providerStat(p.name); s.ok++; s.lastUsed = new Date().toISOString(); flushProviderStats()
         const raw = res.choices[0]?.message?.content?.trim() || null
         return raw?.replace(/<think>[\s\S]*?<\/think>/g, '').trim() || null
       })(),
-      new Promise(resolve => setTimeout(() => {
-        if (!done) console.warn(`[ai] ${p.name} timed out after ${p.timeout}ms`)
+      new Promise(resolve => { timer = setTimeout(() => {
+        if (!done) { console.warn(`[ai] ${p.name} timed out after ${p.timeout}ms`); ac.abort() }
         resolve(null)
-      }, p.timeout)),
+      }, p.timeout) }),
     ])
   } catch (err) {
     done = true
+    // Our own abort (timeout already logged above) → quiet null, not a "failed" log.
+    if (ac.signal.aborted) { providerStat(p.name).err++; flushProviderStats(); return null }
     const is429 = err.status === 429 || err.message?.includes('429')
     const is413 = err.status === 413 || err.message?.includes('413') || err.message?.includes('too large')
     providerStat(p.name).err++; flushProviderStats()
@@ -561,6 +569,8 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
       console.warn(`[ai] ${p.name} failed: ${err.message?.slice(0, 80)}`)
     }
     return null
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 
@@ -654,7 +664,15 @@ function streamPrebuilt(res, text) {
 }
 
 // ── Express setup ─────────────────────────────────────────────────────────────
-app.use(cors())
+// CORS: the SPA is served SAME-ORIGIN (/pm/api/*), so it needs no CORS header. A
+// blanket cors() let any website in the owner's browser drive these (mostly
+// unauthenticated) routes cross-origin. Enable cross-origin only for an explicit
+// env allowlist (CORS_ORIGIN, comma-separated); default = no cross-origin access.
+const _corsOrigins = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+if (_corsOrigins.length) {
+  app.use(cors({ origin: _corsOrigins }))
+  console.log(`[cors] cross-origin allowed for: ${_corsOrigins.join(', ')}`)
+}
 app.use(express.json({ limit: '2mb' }))
 
 // ── Admin auth ────────────────────────────────────────────────────────────────
@@ -1109,6 +1127,12 @@ const FLOW_ORDER = { todo: 0, in_progress: 1, review: 2, done: 3 }
 const DWELL_COLS = ['todo', 'in_progress', 'review', 'blocked']
 function computeFlow(tasks, events, nowMs = Date.now()) {
   const round1 = (ms) => Math.round(ms / 360000) / 10 // ms → hours, 1 decimal
+  // Entry-time / first-in_progress / last-done logic below all assume events are in
+  // chronological order. The /flow route sorts (ORDER BY at ASC) but the digest caller
+  // passes them unsorted (no ORDER BY) — and Postgres returns arbitrary physical order
+  // → wrong dwell → wrong/missed bottleneck alerts. Sort here so correctness never
+  // depends on the caller (idempotent for the already-sorted route).
+  events = [...events].sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0))
   const byTask = new Map()
   for (const e of events) {
     if (!byTask.has(e.taskId)) byTask.set(e.taskId, [])
@@ -2345,7 +2369,10 @@ function scheduleNextDigest() {
   }, ms)
 }
 
-app.get('/api/ai/digest/now', async (req, res) => {
+// requireAdmin: this GET has a side effect (pushes project data to Telegram). Left
+// open, a plain <img src>/link from any page the owner opens would fire it (CSRF).
+// The frontend never calls it; POST /api/admin/digest/send-now is the UI path.
+app.get('/api/ai/digest/now', requireAdmin, async (req, res) => {
   try {
     const msg = await sendMorningDigest()
     res.json({ ok: true, sent: !!msg, message: msg || '(nothing sent — no active projects or Telegram not configured)' })
@@ -3860,12 +3887,23 @@ async function start() {
     console.warn('[digest] could not restore state:', err.message)
   }
 
-  app.listen(PORT, () => {
-    console.log(`[ai-pm] started on port ${PORT}`)
-    scheduleNextDigest()
-    // No startup render warm: that would wake all free services on every restart (watchdog
-    // restarts are frequent) even when nobody is watching. The cache populates lazily on the
-    // first /api/admin/status request once a dashboard is opened.
+  // app.listen reports EADDRINUSE via an async 'error' event, not a throw — so a
+  // bare app.listen() would bypass the startup retry below and crash uncaught. Wrap
+  // it so a pre-listen error rejects into the retry/backoff loop, and swap in a
+  // logging handler once we're actually listening.
+  await new Promise((resolve, reject) => {
+    const server = app.listen(PORT)
+    server.once('error', reject)
+    server.once('listening', () => {
+      server.off('error', reject)
+      server.on('error', (e) => console.error('[ai-pm] server error:', e.message))
+      console.log(`[ai-pm] started on port ${PORT}`)
+      scheduleNextDigest()
+      // No startup render warm: that would wake all free services on every restart (watchdog
+      // restarts are frequent) even when nobody is watching. The cache populates lazily on the
+      // first /api/admin/status request once a dashboard is opened.
+      resolve()
+    })
   })
 }
 
