@@ -1736,6 +1736,24 @@ function decideVerdict(impact, reversibility, urgency, lang) {
   return base
 }
 
+// The decision axes drive both the verdict (exact-string matched below) and the
+// calibration buckets, but they're generated at temp 0.7 so the model emits variants
+// ("irreversible", "One-Way", "Type-1", trailing spaces). Normalize to the canonical
+// enum before verdict/display/persist so a variant can't flip a one-way call into a
+// "run a reversible experiment" verdict or fragment the calibration read-model.
+function normImpact(v) {
+  const s = String(v ?? '').toLowerCase().trim()
+  return s.startsWith('high') ? 'high' : s.startsWith('low') ? 'low' : 'medium'
+}
+function normUrgency(v) { return normImpact(v) } // same high|medium|low scale
+function normReversibility(v) {
+  const s = String(v ?? '').toLowerCase().trim()
+  // one / one-way / one_way / irreversible / type-1 → one-way; else reversible (matches
+  // the previous default, but now catches the synonyms that used to be mis-bucketed).
+  return (s.includes('one') || s.includes('irrevers') || s.includes('type-1') || s.includes('type 1'))
+    ? 'one-way' : 'reversible'
+}
+
 // When JSON extraction/parse fails: if the model returned prose, show it; if it
 // returned a broken (usually truncated) JSON blob, show a clean retry hint rather
 // than dumping raw JSON at the user.
@@ -1829,6 +1847,11 @@ Context: ${context || 'None'}`
     if (!match) return streamPrebuilt(res, jsonFallback(text, lang))
     let d
     try { d = JSON.parse(match[0]) } catch { return streamPrebuilt(res, jsonFallback(text, lang)) }
+    // Canonicalize the axes once so verdict, displayed md, and the persisted
+    // calibration buckets all agree even when the model emits an enum variant.
+    d.impact = normImpact(d.impact)
+    d.reversibility = normReversibility(d.reversibility)
+    d.urgency = normUrgency(d.urgency)
     const verdict = decideVerdict(d.impact, d.reversibility, d.urgency, lang)
     const md = buildDecideMd(d, verdict, lang)
     try {
