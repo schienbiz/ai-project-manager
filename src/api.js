@@ -8,6 +8,25 @@ export const adminAuth = {
 function adminHeaders(extra = {}) {
   return { 'Content-Type': 'application/json', 'x-admin-token': adminAuth.get(), ...extra }
 }
+
+/**
+ * Every request carries the token, and a 401 is a TYPE the caller can branch on.
+ *
+ * Until 2026-09-03 only the twelve /api/admin/* calls sent it; the other thirty-five —
+ * every project, task, note, risk, decision and /api/ai/* call — went out bare, because
+ * the server did not ask. It does now, so a bare request is a 401 and a caller that
+ * cannot tell a 401 from a network error would render an empty dashboard instead of
+ * asking for the token.
+ */
+function unauthorized() {
+  return Object.assign(new Error('Unauthorized'), { status: 401 })
+}
+async function req(url, init = {}) {
+  const res = await fetch(url, { ...init, headers: { 'x-admin-token': adminAuth.get(), ...(init.headers || {}) } })
+  if (res.status === 401) throw unauthorized()
+  return res.json()
+}
+const get = (url) => req(url)
 function adminGet(url) {
   return fetch(url, { headers: { 'x-admin-token': adminAuth.get() } }).then(r => {
     if (r.status === 401) throw Object.assign(new Error('Unauthorized'), { status: 401 })
@@ -31,42 +50,42 @@ const json = (r) => r.json()
 
 export const api = {
   // Dashboard
-  getDashboard:    () => fetch('/pm/api/dashboard').then(json),
-  getPortfolio:    () => fetch('/pm/api/portfolio').then(json),
+  getDashboard:    () => get('/pm/api/dashboard'),
+  getPortfolio:    () => get('/pm/api/portfolio'),
 
   // Template Library
-  getTemplates:    () => fetch('/pm/api/templates').then(json),
+  getTemplates:    () => get('/pm/api/templates'),
   createTemplate:  (data) => post('/pm/api/templates', data),
   updateTemplate:  (id, data) => put(`/pm/api/templates/${id}`, data),
   deleteTemplate:  (id) => del(`/pm/api/templates/${id}`),
 
   // Projects
-  getProjects:     () => fetch('/pm/api/projects').then(json),
-  getProject:      (id) => fetch(`/pm/api/projects/${id}`).then(json),
+  getProjects:     () => get('/pm/api/projects'),
+  getProject:      (id) => get(`/pm/api/projects/${id}`),
   createProject:   (data) => post('/pm/api/projects', data),
   quickStart:      (title, lang) => post('/pm/api/projects/quick-start', { title, lang }),
   updateProject:   (id, data) => put(`/pm/api/projects/${id}`, data),
   deleteProject:   (id) => del(`/pm/api/projects/${id}`),
 
   // Tasks
-  getTasks:        (projectId) => fetch(`/pm/api/tasks?projectId=${projectId}`).then(json),
-  getRunningTasks: () => fetch('/pm/api/tasks/running').then(json),
+  getTasks:        (projectId) => get(`/pm/api/tasks?projectId=${projectId}`),
+  getRunningTasks: () => get('/pm/api/tasks/running'),
   createTask:      (data) => post('/pm/api/tasks', data),
   updateTask:      (id, data) => put(`/pm/api/tasks/${id}`, data),
   deleteTask:      (id) => del(`/pm/api/tasks/${id}`),
   retryAgent:      (id, lang) => post(`/pm/api/tasks/${id}/agent/retry`, { lang }),
 
   // Notes
-  getNotes:        (projectId) => fetch(`/pm/api/notes?projectId=${projectId}`).then(json),
+  getNotes:        (projectId) => get(`/pm/api/notes?projectId=${projectId}`),
   createNote:      (data) => post('/pm/api/notes', data),
   deleteNote:      (id) => del(`/pm/api/notes/${id}`),
 
   // Schedule (critical path + checks)
-  getSchedule:     (projectId) => fetch(`/pm/api/projects/${projectId}/schedule`).then(json),
-  getFlow:         (projectId) => fetch(`/pm/api/projects/${projectId}/flow`).then(json),
+  getSchedule:     (projectId) => get(`/pm/api/projects/${projectId}/schedule`),
+  getFlow:         (projectId) => get(`/pm/api/projects/${projectId}/flow`),
 
   // Risks
-  getRisks:        (projectId) => fetch(`/pm/api/risks?projectId=${projectId}`).then(json),
+  getRisks:        (projectId) => get(`/pm/api/risks?projectId=${projectId}`),
   createRisk:      (data) => post('/pm/api/risks', data),
   updateRisk:      (id, data) => put(`/pm/api/risks/${id}`, data),
   deleteRisk:      (id) => del(`/pm/api/risks/${id}`),
@@ -90,21 +109,21 @@ export const api = {
   translateFields:  (data) => post('/pm/api/ai/translate-fields', data),
 
   // Decision Log
-  getDecisions:       (q = {}) => fetch('/pm/api/decisions?' + new URLSearchParams(q)).then(json),
-  getDecision:        (id) => fetch(`/pm/api/decisions/${id}`).then(json),
+  getDecisions:       (q = {}) => get('/pm/api/decisions?' + new URLSearchParams(q)),
+  getDecision:        (id) => get(`/pm/api/decisions/${id}`),
   setDecisionOutcome: (id, data) => put(`/pm/api/decisions/${id}/outcome`, data),
   deleteDecision:     (id) => del(`/pm/api/decisions/${id}`),
-  getCalibration:     (domain = '') => fetch('/pm/api/decisions/stats/calibration' + (domain ? `?domain=${domain}` : '')).then(json),
+  getCalibration:     (domain = '') => get('/pm/api/decisions/stats/calibration' + (domain ? `?domain=${domain}` : '')),
 }
 
 function post(url, data) {
-  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then(json)
+  return req(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 }
 function put(url, data) {
-  return fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then(json)
+  return req(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 }
 function del(url) {
-  return fetch(url, { method: 'DELETE' }).then(json)
+  return req(url, { method: 'DELETE' })
 }
 
 // SSE helper for agent endpoints — separates step logs from output chunks
@@ -112,7 +131,9 @@ export async function streamAgent(endpoint, body, onStep, onChunk, onDone, onErr
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...extraHeaders },
+      // Token by default rather than only when a caller remembers to pass it —
+      // AgentPanel calls this without extraHeaders and would have 401'd silently.
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': adminAuth.get(), ...extraHeaders },
       body: JSON.stringify(body),
     })
     if (res.status === 401) { onError?.('Unauthorized'); return }
@@ -151,9 +172,12 @@ export async function streamAI(endpoint, body, onChunk, onDone, onError) {
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': adminAuth.get() },
       body: JSON.stringify(body),
     })
+    // streamAI had no 401 branch at all: an unauthenticated call fell through to
+    // res.body.getReader() and threw a TypeError the user saw as a broken stream.
+    if (res.status === 401) { onError?.('Unauthorized'); return }
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()

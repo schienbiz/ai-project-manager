@@ -720,6 +720,34 @@ app.use((req, res, next) => {
   next()
 })
 
+/**
+ * One gate in front of every /api route, rather than requireAdmin repeated on each.
+ *
+ * Until 2026-09-03 only the seventeen /api/admin/* routes were guarded; the other
+ * fifty-eight — every project, task, note, risk, decision and /api/ai/* call — answered
+ * anyone who could reach the port. That is a LAN and a Tailnet, not the internet (ngrok
+ * publishes :3000/ROS, and bore and localhost-run publish port 22, so nothing tunnels
+ * :3004), but "not on the internet" is not the same as "authenticated", and /api/ai/*
+ * spends the account's LLM quota.
+ *
+ * A middleware and not fifty-eight edits: a per-route guard is a guard someone forgets
+ * to add to route fifty-nine, and the forgetting is silent. This one is positioned after
+ * the /pm rewrite so it sees the canonical path.
+ *
+ * PUBLIC_API_PATHS is deliberately tiny and each entry has a named reason:
+ *   /api/status — four things outside this app poll it for liveness (watchdog-atung.sh,
+ *     watchdog-chusmbp.sh, ~/watchdog.sh, and the claims-ledger aipm-status claim). It
+ *     returns provider names, cooldown flags and row COUNTS — no project content.
+ * /health stays open too, but it never reaches here: it is not under /api.
+ */
+const PUBLIC_API_PATHS = new Set(['/api/status'])
+app.use('/api', (req, res, next) => {
+  // req.path here is relative to the '/api' mount, so compare on originalUrl's pathname.
+  const pathname = req.originalUrl.replace(/^\/pm/, '').split('?')[0]
+  if (PUBLIC_API_PATHS.has(pathname)) return next()
+  return requireAdmin(req, res, next)
+})
+
 const now = () => new Date().toISOString()
 const uid = () => randomUUID()
 

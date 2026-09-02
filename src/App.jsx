@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api } from './api.js'
+import { api, adminAuth } from './api.js'
 import { LangContext, T } from './i18n.js'
 import Sidebar from './components/Sidebar.jsx'
 import Dashboard from './components/Dashboard.jsx'
@@ -28,6 +28,12 @@ export default function App() {
   const [showCmdPalette, setShowCmdPalette] = useState(false)
   const [deleteConfirmId, setDeleteConfirmId] = useState(null)
   const toastId = useRef(0)
+  // Shown when the API answers 401. Before 2026-09-03 only /api/admin/* was protected,
+  // so the main app never met a 401 and had no way to ask for a token — the token box
+  // lived inside AdminDashboard, which the user could only reach if the app had already
+  // loaded. Locking the data routes without this would have been a blank screen.
+  const [authError, setAuthError] = useState(false)
+  const [tokenInput, setTokenInput] = useState('')
 
   const switchLang = (l) => { setLang(l); localStorage.setItem('lang', l) }
   const t = T[lang]
@@ -56,11 +62,21 @@ export default function App() {
   }, [])
 
   const loadData = useCallback(async () => {
-    const [ps, ts, st] = await Promise.all([api.getProjects(), api.getTasks(''), api.getDashboard()])
-    setProjects(ps)
-    setTasks(ts)
-    setStats(st)
-    setLoading(false)
+    try {
+      const [ps, ts, st] = await Promise.all([api.getProjects(), api.getTasks(''), api.getDashboard()])
+      setProjects(ps)
+      setTasks(ts)
+      setStats(st)
+      setAuthError(false)
+      setLoading(false)
+    } catch (err) {
+      // A rejected Promise.all used to leave `loading` true forever, which renders as a
+      // permanent spinner — the same shape whether the token is missing or the server is
+      // down. Separate them: 401 asks for the token, anything else stops the spinner.
+      if (err?.status === 401) { setAuthError(true); setLoading(false); return }
+      setLoading(false)
+      throw err
+    }
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
@@ -188,6 +204,29 @@ export default function App() {
 
   return (
     <LangContext.Provider value={{ lang, setLang: switchLang, t }}>
+    {authError && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(10,10,18,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <form
+          onSubmit={(e) => { e.preventDefault(); adminAuth.set(tokenInput.trim()); setTokenInput(''); setAuthError(false); setLoading(true); loadData() }}
+          style={{ background: '#14141f', border: '1px solid #2a2a3a', borderRadius: 12, padding: 24, width: 340 }}
+        >
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6, color: '#e8e8f0' }}>需要 admin token</div>
+          <div style={{ fontSize: 12, color: '#8a8a9a', marginBottom: 14, lineHeight: 1.5 }}>
+            伺服器上的 <code>ADMIN_TOKEN</code>。只存在這個瀏覽器分頁（sessionStorage）。
+          </div>
+          <input
+            type="password" autoFocus value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="admin token…"
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #2a2a3a', background: '#0d0d16', color: '#e8e8f0', fontSize: 13, marginBottom: 12, boxSizing: 'border-box' }}
+          />
+          <button type="submit" disabled={!tokenInput.trim()}
+            style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontSize: 13, fontWeight: 600, cursor: tokenInput.trim() ? 'pointer' : 'not-allowed', opacity: tokenInput.trim() ? 1 : 0.5 }}>
+            連線
+          </button>
+        </form>
+      </div>
+    )}
     <div className="app" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       <Sidebar
         projects={projects}
