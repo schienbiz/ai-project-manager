@@ -428,29 +428,34 @@ process.on('uncaughtException', (err) => {
 })
 
 // ── AI Providers ──────────────────────────────────────────────────────────────
+// Models and per-model parameters checked against the live APIs on 2026-09-02.
+// Every entry here was dead before that: llama-4-scout and qwen3-32b 404 on Groq,
+// Cerebras 402 on every key, NVIDIA's llama-3.3-70b 410 (EOL 2026-08-26).
+//
+// `extraParams` is per MODEL, not per provider: qwen3.x needs reasoning_effort
+// 'none' or it returns its <think> block as the answer, while gpt-oss rejects
+// 'none' with a 400 and wants low|medium|high.
+//
+// `timeout` is measured, not guessed. On a generate-plan-sized request
+// (max_tokens 2048) the Groq models answer in 4.7-5.2s and Mistral in 17-18s —
+// which is why Mistral's old 15s ceiling meant the one provider still alive was
+// being cut off by its own configuration on every large request.
 const PROVIDERS = [
   {
     name: 'Groq',
     key: process.env.GROQ_API_KEY,
     baseURL: 'https://api.groq.com/openai/v1',
-    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-    timeout: 8_000,
+    model: 'openai/gpt-oss-120b',
+    timeout: 15_000,
     fetch: customFetch,
-  },
-  {
-    name: 'Cerebras',
-    key: process.env.CEREBRAS_API_KEY,
-    baseURL: 'https://api.cerebras.ai/v1',
-    model: 'gpt-oss-120b',
-    timeout: 11_000,
-    fetch: customFetch,
+    extraParams: { reasoning_effort: 'low' },
   },
   {
     name: 'Qwen3',
-    key: process.env.GROQ_QWEN_API_KEY || process.env.GROQ_API_KEY,  // separate key avoids shared rate limit with Groq Llama
+    key: process.env.GROQ_QWEN_API_KEY || process.env.GROQ_API_KEY,  // separate key avoids shared rate limit with Groq
     baseURL: 'https://api.groq.com/openai/v1',
-    model: 'qwen/qwen3-32b',
-    timeout: 10_000,
+    model: 'qwen/qwen3.8-27b',
+    timeout: 15_000,
     fetch: customFetch,
     extraParams: { reasoning_effort: 'none' },
   },
@@ -458,18 +463,22 @@ const PROVIDERS = [
     name: 'NVIDIA',
     key: process.env.NVIDIA_API_KEY,
     baseURL: 'https://integrate.api.nvidia.com/v1',
-    model: 'meta/llama-3.3-70b-instruct',
+    model: 'openai/gpt-oss-120b',
     timeout: 30_000,
     fetch: customFetch,
+    extraParams: { reasoning_effort: 'low' },
   },
+  // Slowest, and last: it is the only one here that is not gpt-oss or qwen, so it
+  // is worth keeping as an independent voice for the synthesis step.
   ...(process.env.MISTRAL_API_KEY ? [{
     name: 'Mistral',
     key: process.env.MISTRAL_API_KEY,
     baseURL: 'https://api.mistral.ai/v1',
     model: 'mistral-small-latest',
-    timeout: 15_000,
+    timeout: 25_000,
     fetch: customFetch,
   }] : []),
+  // Cerebras removed 2026-09-02 — every key on that account answers 402.
 ]
 
 function makeClient(p) {
@@ -574,7 +583,17 @@ async function tryProvider(p, messages, maxTokens, _isRetry = false) {
   }
 }
 
-const MULTI_MAX_MS = 13_000
+// Derived from the providers rather than hardcoded, so raising a timeout cannot
+// silently put a provider outside the window that decides whether it is allowed
+// to contribute. At the old fixed 13s, Mistral — the only non-gpt-oss/qwen voice
+// here, and the slowest at 17-18s on a 2000-token request — was excluded from
+// every large synthesis.
+//
+// Measured, so the cost is on the record: on generate-plan this yields a 4-model
+// synthesis in 18-23s versus 3 models in ~18s. Total latency is dominated by the
+// synthesis call, not by this cap. Providers that fail fast (4xx) settle
+// immediately either way; this only bounds the genuinely-in-flight case.
+const MULTI_MAX_MS = Math.max(...PROVIDERS.map(p => p.timeout)) + 1_000
 
 async function multiGenerate(messages, maxTokens = 2048) {
   const successes = []

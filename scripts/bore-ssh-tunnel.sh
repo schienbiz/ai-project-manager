@@ -3,9 +3,22 @@
 
 BORE=~/bin/bore
 BORE_LOG=/tmp/bore-ssh-output.log
-PLIST=~/Library/LaunchAgents/com.ai-project-manager.dev.plist
-BOT_TOKEN="$(grep -A1 'BOT_TOKEN' "$PLIST" | tail -1 | sed 's/.*<string>//;s/<\/string>.*//')"
-CHAT_ID="$(grep -A1 'OWNER_TELEGRAM_ID' "$PLIST" | tail -1 | sed 's/.*<string>//;s/<\/string>.*//')"
+
+# Credentials moved out of the plist into .env when the service was migrated, but
+# this script kept grepping the plist for them — so BOT_TOKEN came back empty and
+# tg() returned early on every call. The one job this script has when Tailscale is
+# down is telling you which port bore assigned, and it had been silently skipping
+# it. Read them from the same .env the server uses.
+ENV_FILE=~/CloudSync/ai-project-manager/.env
+BOT_TOKEN="$(grep -E '^BOT_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'"' )"
+CHAT_ID="$(grep -E '^OWNER_TELEGRAM_ID=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'"' )"
+
+# Fail loudly rather than degrade into a silent no-op: a notifier that cannot
+# notify is worse than one that is absent, because it looks installed.
+if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+  echo "[bore-ssh] FATAL: BOT_TOKEN/OWNER_TELEGRAM_ID not found in $ENV_FILE — the tunnel port could not be reported" >&2
+  exit 78   # EX_CONFIG
+fi
 
 tg() {
   [ -z "$BOT_TOKEN" ] && return
