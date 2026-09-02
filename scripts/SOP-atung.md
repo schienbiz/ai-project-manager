@@ -40,7 +40,7 @@ cat /tmp/atung-watchdog.log
 
 ## 1. Syncthing Down
 
-**Detect:** `curl -s http://localhost:8384/rest/system/ping -H "X-API-Key: JHPURzgxjGsAmbv5mgRACvL2WYxFHPRW"`
+**Detect:** `curl -s http://localhost:8384/rest/system/ping -H "X-API-Key: $SYNCTHING_KEY"`
 
 **Fix:**
 ```bash
@@ -142,7 +142,7 @@ ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/<LABEL>"
 ssh chuchuchien0430@100.115.104.42 "for svc in '3000:/health' '3001:/' '3003:/health' '3004:/pm/api/status'; do port=\${svc%%:*}; path=\${svc##*:}; code=\$(curl -s --max-time 3 \"http://localhost:\$port\$path\" -o /dev/null -w '%{http_code}'); echo \"Port \$port: \$code\"; done"
 
 # ATung Syncthing
-curl -s http://localhost:8384/rest/system/ping -H "X-API-Key: JHPURzgxjGsAmbv5mgRACvL2WYxFHPRW"
+curl -s http://localhost:8384/rest/system/ping -H "X-API-Key: $SYNCTHING_KEY"
 
 # Watchdog last run
 cat /tmp/atung-watchdog.log | tail -5

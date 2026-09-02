@@ -10,8 +10,17 @@
 # chusMBp service watchdog — runs every 5 min via LaunchAgent
 # Checks all 6 services, restarts dead ones, sends Telegram alert on action taken.
 
-BOT_TOKEN="8696185476:AAHGPjhDQMkLIbP6XN4jgJiEqpa3Ce1UE2Y"
-CHAT_ID="5108352229"
+# secrets: sourced from untracked ~/.watchdog-secrets (chmod 600, outside any Syncthing folder).
+# on chusMBp $HOME=/Users/chuchuchien0430; rotate the token there, not here. exits loudly if missing.
+SECRETS_FILE="${WATCHDOG_SECRETS:-$HOME/.watchdog-secrets}"
+if [ ! -f "$SECRETS_FILE" ]; then
+  echo "watchdog: missing $SECRETS_FILE (BOT_TOKEN/CHAT_ID)" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$SECRETS_FILE"
+: "${BOT_TOKEN:?watchdog: BOT_TOKEN unset in $SECRETS_FILE}"
+: "${CHAT_ID:?watchdog: CHAT_ID unset in $SECRETS_FILE}"
 
 send_telegram() {
   curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \

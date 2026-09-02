@@ -151,18 +151,21 @@ tail -30 /tmp/ai-learning-tool.log | grep -E 'fail|circuit|429|timeout'
 
 ---
 
-## 8. ngrok Tunnel Down
+## 8. 外部存取不通（ngrok 已退役）
 
-**Detect:** Public URL `https://cancel-aneurism-uneven.ngrok-free.dev` returns error.
+> **ngrok 全面退役 2026-07-11**：免費靜態域被掃描 6 萬次、全 403 零產出，`com.relationship-os.ngrok` / `com.ngrok-ssh` 兩個 plist 已 `bootout` 並改名 `.disabled`。**不要再 kickstart ngrok。** 沒有公開 URL 了。
 
-**Fix:**
+**外部存取一律走 Tailscale：**
 ```bash
-launchctl kickstart -k gui/501/com.relationship-os.ngrok
-sleep 5
-curl -s http://localhost:4040/api/tunnels | python3 -c 'import sys,json; [print(t["public_url"]) for t in json.load(sys.stdin)["tunnels"]]'
+# 儀表板（手機/外部裝 Tailscale App 即可連）
+open http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm
+
+# Tailscale 本身掛掉時 → SSH 後援走 bore（見 reference_chusMBp_ssh）
+cat ~/CloudSync/ai-project-manager/data/bore-ssh-current.txt   # 取得當前 port
+ssh -p <PORT> chuchuchien0430@bore.pub
 ```
 
-Note: Static ngrok domain never changes after restart.
+**Detect:** `curl http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm/api/status` 非 200 → 服務或 Tailscale 傳輸問題，非 ngrok。
 
 ---
 

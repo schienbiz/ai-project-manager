@@ -27,8 +27,8 @@ Covers all 4 projects: AI Project Manager, Marketing Assistant, AI Learning Tool
 Cause: rapid burst (e.g. 8 background agents at once) tripped all circuit breakers.
 
 ```bash
-# Check admin dashboard
-open https://cancel-aneurism-uneven.ngrok-free.dev/pm/admin
+# Check admin dashboard (Tailscale only — ngrok retired 2026-07-11)
+open http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm/admin
 
 # Or SSH and restart service (clears all in-memory cooldowns)
 ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
@@ -135,8 +135,8 @@ For Relationship OS: add the provider to `llm.ts`'s fallback chain. Circuit brea
 ssh chuchuchien0430@chus-macbook-pro-4.tailb03d65.ts.net \
   "tail -f /tmp/ai-project-manager.log /tmp/ai-learning-tool.log /tmp/marketing-dev.log"
 
-# Check AI PM circuit breaker state via admin API
-curl https://cancel-aneurism-uneven.ngrok-free.dev/pm/api/admin/status | \
+# Check AI PM circuit breaker state via admin API (Tailscale only — ngrok retired)
+curl http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm/api/admin/status | \
   python3 -c "import sys,json; d=json.load(sys.stdin); [print(p['name'],p.get('cooling','?')) for p in d['providers']]"
 
 # Check learning tool for 402 / 429 events

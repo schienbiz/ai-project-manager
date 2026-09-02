@@ -3,8 +3,10 @@
 # مدير المشاريع الذكي — دليل المستخدم
 
 **Version:** 2026-05-20 (rev 3)
-**URL:** https://cancel-aneurism-uneven.ngrok-free.dev/pm
-**Tailscale (local):** http://chus-macbook-pro-4.tailb03d65.ts.net:3004/
+**URL (Tailscale only):** http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm
+**Admin:** http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm/admin
+
+> ngrok 公開域已於 2026-07-11 退役（掃描攻擊面 + 零產出）。外部存取一律走 Tailscale（手機裝 Tailscale App 即可連），不再有公開 URL。
 
 ---
 
