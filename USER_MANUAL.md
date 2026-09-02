@@ -1,10 +1,13 @@
 # AI Project Manager — User Manual
+
+> 主機識別已抽換為 `~/.ssh/config` 的 `chusMBp` 別名（該檔未進版控）。
+> 這個 repo 是公開的，使用者名稱、tailnet 名稱與 Tailscale IP 不放在這裡。
 # AI 專案管理 — 使用手冊
 # مدير المشاريع الذكي — دليل المستخدم
 
 **Version:** 2026-05-20 (rev 3)
-**URL (Tailscale only):** http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm
-**Admin:** http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm/admin
+**URL (Tailscale only):** http://<chusmbp-tailscale>:3004/pm
+**Admin:** http://<chusmbp-tailscale>:3004/pm/admin
 
 > ngrok 公開域已於 2026-07-11 退役（掃描攻擊面 + 零產出）。外部存取一律走 Tailscale（手機裝 Tailscale App 即可連），不再有公開 URL。
 

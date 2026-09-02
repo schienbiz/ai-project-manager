@@ -1,6 +1,6 @@
 #!/bin/bash
 # ⚠️ 版控鏡像（MIRROR ONLY — NOT EXECUTED）：實際在跑的是 chusMBp 的 ~/watchdog.sh
-# （com.chusmbp.watchdog LaunchAgent ProgramArguments 指向 /Users/chuchuchien0430/watchdog.sh，
+# （com.chusmbp.watchdog LaunchAgent ProgramArguments 指向 $HOME/watchdog.sh，
 # 非本 repo 檔）。改行為必須 SSH 直改 ~/watchdog.sh，完成後再把變更同步回此鏡像。
 # 直接改此檔不會影響任何執行中的服務。
 #
@@ -11,7 +11,7 @@
 # Checks all 6 services, restarts dead ones, sends Telegram alert on action taken.
 
 # secrets: sourced from untracked ~/.watchdog-secrets (chmod 600, outside any Syncthing folder).
-# on chusMBp $HOME=/Users/chuchuchien0430; rotate the token there, not here. exits loudly if missing.
+# rotate the token in that file, not here. exits loudly if missing.
 SECRETS_FILE="${WATCHDOG_SECRETS:-$HOME/.watchdog-secrets}"
 if [ ! -f "$SECRETS_FILE" ]; then
   echo "watchdog: missing $SECRETS_FILE (BOT_TOKEN/CHAT_ID)" >&2

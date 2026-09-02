@@ -6,7 +6,10 @@ discrete spread wakes (dense cron topology).
 """
 import json, sys, urllib.request, datetime, collections
 
-ENV = "/Users/chuchuchien0430/CloudSync/ai-project-manager/.env"
+import os
+# expanduser, not a hardcoded home: the absolute path only worked on one machine and
+# put that machine's username into a public repository.
+ENV = os.path.expanduser("~/CloudSync/ai-project-manager/.env")
 env = {}
 for line in open(ENV):
     line = line.strip()

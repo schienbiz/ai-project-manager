@@ -1,5 +1,8 @@
 # SOP: ATung Machine Procedures
 
+> 主機識別已抽換為 `~/.ssh/config` 的 `chusMBp` 別名（該檔未進版控）。
+> 這個 repo 是公開的，使用者名稱、tailnet 名稱與 Tailscale IP 不放在這裡。
+
 ATung is the development machine. Production services run on chusMBp.
 ATung's critical local service is Syncthing (keeps code in sync with chusMBp).
 
@@ -74,20 +77,20 @@ sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale down && sudo /Applicat
 **If machine is offline (wait for it to come back, then SSH):**
 ```bash
 # Via Tailscale (preferred, when online)
-ssh chuchuchien0430@100.115.104.42
+ssh chusMBp
 
 # Via bore SSH fallback (port in latest Telegram notification)
-ssh -p <PORT> chuchuchien0430@bore.pub
+ssh -p <PORT> <user>@bore.pub
 ```
 
 **Restart all services after SSH:**
 ```bash
-ssh chuchuchien0430@100.115.104.42 "for label in com.ai-project-manager.dev com.ai-learning-tool.dev com.marketing-assistant.dev com.relationship-os.dev com.proxy.marketing com.voice-trainer; do launchctl kickstart -k gui/501/\$label; done"
+ssh chusMBp "for label in com.ai-project-manager.dev com.ai-learning-tool.dev com.marketing-assistant.dev com.relationship-os.dev com.proxy.marketing com.voice-trainer; do launchctl kickstart -k gui/501/\$label; done"
 ```
 
 **If caffeinate not installed (machine kept sleeping):**
 ```bash
-ssh chuchuchien0430@100.115.104.42 "bash ~/CloudSync/ai-project-manager/scripts/install-on-chusmbp.sh"
+ssh chusMBp "bash ~/CloudSync/ai-project-manager/scripts/install-on-chusmbp.sh"
 ```
 
 ---
@@ -96,16 +99,16 @@ ssh chuchuchien0430@100.115.104.42 "bash ~/CloudSync/ai-project-manager/scripts/
 
 ```bash
 # AI PM
-ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
+ssh chusMBp "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
 
 # AI Learning Tool
-ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/com.ai-learning-tool.dev"
+ssh chusMBp "launchctl kickstart -k gui/501/com.ai-learning-tool.dev"
 
 # Marketing Assistant
-ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/com.marketing-assistant.dev"
+ssh chusMBp "launchctl kickstart -k gui/501/com.marketing-assistant.dev"
 
 # Relationship OS
-ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/com.relationship-os.dev"
+ssh chusMBp "launchctl kickstart -k gui/501/com.relationship-os.dev"
 ```
 
 ---
@@ -116,21 +119,21 @@ ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/com.relations
 ```bash
 cd ~/CloudSync/ai-project-manager
 npm run build
-scp server/index.js chuchuchien0430@100.115.104.42:/Users/chuchuchien0430/CloudSync/ai-project-manager/server/index.js
-scp -r dist chuchuchien0430@100.115.104.42:/Users/chuchuchien0430/CloudSync/ai-project-manager/
-ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
+scp server/index.js chusMBp:$HOME/CloudSync/ai-project-manager/server/index.js
+scp -r dist chusMBp:$HOME/CloudSync/ai-project-manager/
+ssh chusMBp "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
 ```
 
 **Server-only changes (no build needed):**
 ```bash
-scp server/index.js chuchuchien0430@100.115.104.42:/Users/chuchuchien0430/CloudSync/ai-project-manager/server/index.js
-ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
+scp server/index.js chusMBp:$HOME/CloudSync/ai-project-manager/server/index.js
+ssh chusMBp "launchctl kickstart -k gui/501/com.ai-project-manager.dev"
 ```
 
 **Other services (Syncthing syncs automatically):**
 ```bash
 # Wait for Syncthing sync, then restart service:
-ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/<LABEL>"
+ssh chusMBp "launchctl kickstart -k gui/501/<LABEL>"
 ```
 
 ---
@@ -139,7 +142,7 @@ ssh chuchuchien0430@100.115.104.42 "launchctl kickstart -k gui/501/<LABEL>"
 
 ```bash
 # chusMBp services
-ssh chuchuchien0430@100.115.104.42 "for svc in '3000:/health' '3001:/' '3003:/health' '3004:/pm/api/status'; do port=\${svc%%:*}; path=\${svc##*:}; code=\$(curl -s --max-time 3 \"http://localhost:\$port\$path\" -o /dev/null -w '%{http_code}'); echo \"Port \$port: \$code\"; done"
+ssh chusMBp "for svc in '3000:/health' '3001:/' '3003:/health' '3004:/pm/api/status'; do port=\${svc%%:*}; path=\${svc##*:}; code=\$(curl -s --max-time 3 \"http://localhost:\$port\$path\" -o /dev/null -w '%{http_code}'); echo \"Port \$port: \$code\"; done"
 
 # ATung Syncthing
 curl -s http://localhost:8384/rest/system/ping -H "X-API-Key: $SYNCTHING_KEY"
@@ -178,8 +181,8 @@ Free tier — cold starts ~35s after 15min idle. No action needed unless errors 
 ## Reference: chusMBp SSH
 
 ```bash
-ssh chuchuchien0430@100.115.104.42   # via Tailscale IP
-ssh chuchuchien0430@chusMBp          # if hostname resolves
+ssh chusMBp   # via Tailscale IP
+ssh <chusmbp-user>@chusMBp          # if hostname resolves
 ```
 
 Logs on chusMBp:

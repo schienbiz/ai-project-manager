@@ -18,9 +18,13 @@ source "$SECRETS_FILE"
 : "${BOT_TOKEN:?watchdog: BOT_TOKEN unset in $SECRETS_FILE}"
 : "${CHAT_ID:?watchdog: CHAT_ID unset in $SECRETS_FILE}"
 : "${SYNCTHING_KEY:?watchdog: SYNCTHING_KEY unset in $SECRETS_FILE}"
-CHUSMBP="100.115.104.42"
-CHUS_USER="chuchuchien0430"
-HB_FILE="/Users/atungc/CloudSync/ai-project-manager/data/heartbeat.json"
+# Machine identity comes from the same untracked secrets file as the token — this repo
+# is public, and a Tailscale address plus a username is a fingerprint of a private
+# network. Same `:?` treatment as the credentials: absent means exit loudly rather than
+# run against an empty host.
+: "${CHUSMBP:?watchdog: CHUSMBP unset in $SECRETS_FILE}"
+: "${CHUS_USER:?watchdog: CHUS_USER unset in $SECRETS_FILE}"
+HB_FILE="$HOME/CloudSync/ai-project-manager/data/heartbeat.json"
 
 CHUS_COOLDOWN_FILE="/tmp/watchdog-chus-cooldown"
 CHUS_RESTART_COOLDOWN_FILE="/tmp/watchdog-chus-restart-cooldown"
@@ -100,7 +104,7 @@ TAILSCALE_VOICE=$(curl -s --max-time 6 "http://${CHUSMBP}:3005/health" -o /dev/n
 
 # Out-of-band liveness: probe chusMBp's bore.pub SSH tunnel port (published by
 # bore-ssh-tunnel.sh into the Syncthing-synced data dir). Independent of Tailscale.
-BORE_PORT=$(grep -oE '[0-9]+' "/Users/atungc/CloudSync/ai-project-manager/data/bore-ssh-current.txt" 2>/dev/null | head -1)
+BORE_PORT=$(grep -oE '[0-9]+' "$HOME/CloudSync/ai-project-manager/data/bore-ssh-current.txt" 2>/dev/null | head -1)
 BORE_ALIVE="no"
 if [ -n "$BORE_PORT" ] && nc -z -w 5 bore.pub "$BORE_PORT" 2>/dev/null; then BORE_ALIVE="yes"; fi
 
@@ -181,7 +185,7 @@ for entry in \
   "com.voice-trainer.dev 3005" \
   "com.warehouse-scanner.dev 3008"; do
   label="${entry%% *}"; port="${entry##* }"
-  plist="/Users/atungc/Library/LaunchAgents/${label}.plist"
+  plist="$HOME/Library/LaunchAgents/${label}.plist"
   [ -f "$plist" ] || continue   # plist 不存在 = 刻意沒這個 agent，跳過
   if ! launchctl print "gui/${UID_NUM}/${label}" >/dev/null 2>&1; then
     echo "[watchdog] $(date): local agent $label NOT loaded — bootstrapping"
@@ -211,6 +215,35 @@ if [ ${#LOCAL_RECOVERED[@]} -gt 0 ]; then
 else
   echo "[watchdog] $(date): local agents all loaded & healthy"
   rm -f "$LOCAL_AGENT_COOLDOWN_FILE"
+fi
+
+# --- audit dead-man's switch ---
+# com.atung.audit runs audit-ground-truth.sh daily and pages on FAIL. But a scheduled
+# check that stops running is silent in exactly the way the audit's own date gates were
+# silent for months: §9 was written to catch an overdue claims ledger and never fired,
+# because nothing ran the script that contained it. So something OUTSIDE that schedule
+# has to notice, and this watchdog — every 5 minutes, already wired to Telegram — is the
+# cheapest thing that already exists.
+#
+# 48h, not 24h: the audit is daily and this laptop sleeps. One missed day is ordinary;
+# two means the schedule itself is broken. A threshold that cries on the ordinary is a
+# threshold that gets muted.
+AUDIT_HB="$HOME/.audit-last-run"
+AUDIT_STALE_SECS=172800
+AUDIT_COOLDOWN_FILE="/tmp/watchdog-audit-cooldown"
+if [ -f "$AUDIT_HB" ]; then
+  AUDIT_AGE=$(( $(date +%s) - $(cat "$AUDIT_HB" 2>/dev/null || echo 0) ))
+else
+  AUDIT_AGE=$AUDIT_STALE_SECS
+fi
+if [ "$AUDIT_AGE" -ge "$AUDIT_STALE_SECS" ]; then
+  echo "[watchdog] $(date): audit heartbeat stale (${AUDIT_AGE}s)"
+  if ! is_in_cooldown "$AUDIT_COOLDOWN_FILE"; then
+    ALERTS+=("🕰️ *audit 排程沒在跑* — 心跳已 $(( AUDIT_AGE / 3600 ))h 未更新\ncom.atung.audit 應每日 09:30 執行\n\`launchctl print gui/501/com.atung.audit\`")
+    set_cooldown "$AUDIT_COOLDOWN_FILE"
+  fi
+else
+  rm -f "$AUDIT_COOLDOWN_FILE"
 fi
 
 if [ ${#ALERTS[@]} -gt 0 ]; then

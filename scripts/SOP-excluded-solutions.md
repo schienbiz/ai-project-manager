@@ -1,5 +1,8 @@
 # 排除方案記錄 — 2026-06-14 chusMBp 全面下線事件
 
+> 主機識別已抽換為 `~/.ssh/config` 的 `chusMBp` 別名（該檔未進版控）。
+> 這個 repo 是公開的，使用者名稱、tailnet 名稱與 Tailscale IP 不放在這裡。
+
 事件：chusMBp 睡眠導致 ngrok + Tailscale + bore 全死，無法監控、無法重啟。
 
 ## 套用的修正
@@ -85,7 +88,7 @@ sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up --auth-key=<REUSABL
 **不需修復**: 自動恢復。
 
 ### 問題 4：background watcher 只走 Tailscale SSH，Tailscale 掛掉時完全無效
-**根因**: `wait-and-install.sh` hardcode 用 `ssh chuchuchien0430@100.115.104.42`，但這個 IP 只能透過 Tailscale 到達。
+**根因**: `wait-and-install.sh` hardcode 用 `ssh chusMBp`，但這個 IP 只能透過 Tailscale 到達。
 **現有緩解**: bore SSH tunnel 會在 chusMBp 啟動時發 Telegram 通知，可手動 SSH。
 **未來修復**: watcher 可以同時試 bore.pub（但 port 動態，需從 Telegram 通知中解析）— 暫排除，因為目前人工處理可接受。
 

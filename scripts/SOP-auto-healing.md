@@ -1,5 +1,8 @@
 # SOP: Auto-Healing Procedures for chusMBp Services
 
+> 主機識別已抽換為 `~/.ssh/config` 的 `chusMBp` 別名（該檔未進版控）。
+> 這個 repo 是公開的，使用者名稱、tailnet 名稱與 Tailscale IP 不放在這裡。
+
 Services: ROS (3000), Marketing (3001), Proxy (3002), AI Learning (3003), AI PM (3004)
 
 ---
@@ -158,14 +161,14 @@ tail -30 /tmp/ai-learning-tool.log | grep -E 'fail|circuit|429|timeout'
 **外部存取一律走 Tailscale：**
 ```bash
 # 儀表板（手機/外部裝 Tailscale App 即可連）
-open http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm
+open http://<chusmbp-tailscale>:3004/pm
 
 # Tailscale 本身掛掉時 → SSH 後援走 bore（見 reference_chusMBp_ssh）
 cat ~/CloudSync/ai-project-manager/data/bore-ssh-current.txt   # 取得當前 port
-ssh -p <PORT> chuchuchien0430@bore.pub
+ssh -p <PORT> <user>@bore.pub
 ```
 
-**Detect:** `curl http://chus-macbook-pro-4.tailb03d65.ts.net:3004/pm/api/status` 非 200 → 服務或 Tailscale 傳輸問題，非 ngrok。
+**Detect:** `curl http://<chusmbp-tailscale>:3004/pm/api/status` 非 200 → 服務或 Tailscale 傳輸問題，非 ngrok。
 
 ---
 

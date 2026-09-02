@@ -67,7 +67,7 @@ if [ -n "$PORT" ]; then
     date +%s > "$COOLDOWN_FILE"
     tg "🔑 *chusMBp SSH Fallback (bore)*
 Port changes on restart — current port:
-\`ssh -p $PORT chuchuchien0430@bore.pub\`
+\`ssh -p $PORT $(whoami)@bore.pub\`
 _(Use when Tailscale is down)_"
   else
     echo "[bore-ssh] $(date): skipping Telegram (cooldown active)"
