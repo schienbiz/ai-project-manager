@@ -40,6 +40,10 @@ CHUS_RESTART_COOLDOWN_FILE="/tmp/watchdog-chus-restart-cooldown"
 CHUS_TRANSPORT_COOLDOWN_FILE="/tmp/watchdog-chus-transport-cooldown"
 SYNCTHING_COOLDOWN_FILE="/tmp/watchdog-syncthing-cooldown"
 CHUS_WOKE_COOLDOWN_FILE="/tmp/watchdog-chus-woke-cooldown"
+# 倒數提醒的已發送紀錄。放在 snooze 檔旁邊而不是 /tmp：/tmp 會被系統定期清掉，
+# 那會讓「已經提醒過」這件事失憶，於是同一個里程碑重複發。檔名綁著 snooze 檔，
+# 內容綁著到期日——改了到期日就等於一次新的靜音，倒數自動重新開始。
+CHUS_REMIND_MILESTONES="14 7 3 1"
 COOLDOWN_SECS=1800
 
 RESTART_CMD="for label in com.ai-project-manager.dev com.ai-learning-tool.dev com.proxy.marketing com.voice-trainer com.chusmbp.watchdog; do launchctl kickstart -k gui/501/\$label 2>/dev/null; done"
@@ -118,13 +122,14 @@ fi
 #      日期會讓「會過期」這個唯一的安全性質失效，而失效後看起來跟正常完全一樣。
 CHUS_SNOOZE_FILE="${CHUS_SNOOZE_FILE:-$HOME/.chusmbp-snooze}"
 CHUS_SNOOZE_MAX_DAYS=400
+CHUS_REMIND_FILE="${CHUS_SNOOZE_FILE}.reminded"
 CHUS_SNOOZED="no"; CHUS_SNOOZE_UNTIL=""; CHUS_SNOOZE_WHY=""
 CHUS_SNOOZE_SKIP=""; CHUS_SNOOZE_BAD="no"
+SNZ_NOW=$(date +%s); SNZ_EPOCH=""
 if [ -f "$CHUS_SNOOZE_FILE" ]; then
   SNZ_LINE=$(grep -m1 -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]]|$)' "$CHUS_SNOOZE_FILE" 2>/dev/null | tr -d '\r')
   CHUS_SNOOZE_UNTIL="${SNZ_LINE%%[[:space:]]*}"
   CHUS_SNOOZE_WHY=$(printf '%s' "${SNZ_LINE#"$CHUS_SNOOZE_UNTIL"}" | sed 's/^[[:space:]]*//')
-  SNZ_NOW=$(date +%s)
   SNZ_EPOCH=$(date -j -f "%Y-%m-%d %H:%M:%S" "${CHUS_SNOOZE_UNTIL} 00:00:00" +%s 2>/dev/null || echo "")
   if [ -z "$CHUS_SNOOZE_UNTIL" ]; then
     CHUS_SNOOZE_SKIP="檔案裡沒有合法的 YYYY-MM-DD"; CHUS_SNOOZE_BAD="yes"
@@ -154,10 +159,33 @@ if [ "$CHUS_SNOOZED" = "yes" ]; then
   else
     rm -f "$CHUS_WOKE_COOLDOWN_FILE"
   fi
+
+  # 到期倒數提醒。沒有這段的話，「提醒」就等於到期當天自動恢復探測——機器若仍關機，
+  # 那是每 30 分鐘一則 OFFLINE，是一場告警風暴而不是一個可以回答的問題。
+  # 遞減里程碑（14/7/3/1 天）而不是每天一則：連發十四天的倒數，換來的是被整串滑掉。
+  # 兩層刻意都留著：這層優雅、可能被忽略；到期自動恢復那層吵、但不可能被忽略。
+  SNZ_DAYS_LEFT=$(( (SNZ_EPOCH - SNZ_NOW) / 86400 ))
+  REMIND_DONE=""
+  if [ -f "$CHUS_REMIND_FILE" ]; then
+    RF=$(cat "$CHUS_REMIND_FILE" 2>/dev/null)
+    case "$RF" in
+      "${CHUS_SNOOZE_UNTIL}:"*) REMIND_DONE="${RF#*:}" ;;
+      *) : ;;   # 紀錄屬於另一個到期日 → 視為沒提醒過，倒數重新開始
+    esac
+  fi
+  for M in $CHUS_REMIND_MILESTONES; do
+    [ "$SNZ_DAYS_LEFT" -le "$M" ] || continue
+    case " ${REMIND_DONE} " in *" ${M} "*) continue ;; esac
+    echo "[watchdog] $(date): chusMBp 靜音倒數提醒 T-${M}（實際剩 ${SNZ_DAYS_LEFT} 天）"
+    ALERTS+=("⏳ *chusMBp 監控靜音快到期* — 還剩 ${SNZ_DAYS_LEFT} 天（${CHUS_SNOOZE_UNTIL}）\n\n到期後 watchdog 會自動恢復探測。機器若仍關機，就會開始每 30 分鐘一則 OFFLINE 告警。\n\n延長：改 \`~/.chusmbp-snooze\` 第一行的日期（上限距今 ${CHUS_SNOOZE_MAX_DAYS} 天，再遠會被當成誤植而不生效）\n如期恢復：不用做任何事\n提早恢復：\`rm ~/.chusmbp-snooze\`")
+    printf '%s:%s\n' "$CHUS_SNOOZE_UNTIL" "${REMIND_DONE:+$REMIND_DONE }$M" > "$CHUS_REMIND_FILE"
+    break
+  done
 else
   if [ -n "$CHUS_SNOOZE_SKIP" ]; then
     echo "[watchdog] $(date): chusMBp snooze 未生效（${CHUS_SNOOZE_SKIP}）— 照常監控"
   fi
+  rm -f "$CHUS_REMIND_FILE"   # 沒在靜音 → 倒數紀錄沒有意義，清掉讓下次從頭算
 
   # Network checks
   # All three service probes go over Tailscale (${CHUSMBP} = Tailscale IP). The ngrok HTTP
