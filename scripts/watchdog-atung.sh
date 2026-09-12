@@ -275,11 +275,16 @@ fi
 # 後無人 re-bootstrap → 靜默消失(warehouse 7/9 正是此態)。KeepAlive 只在「已載入」時
 # 管 crash，不管「被移出 domain」。此段補上：未註冊→bootstrap；已註冊但 port 死→kickstart。
 # 每筆 "label port"（port=0 表示無 HTTP 只驗註冊）。bash 3.2 相容(無 declare -A)。
+# 2026-09-12 補上 ROS：它 09-07 搬進這台機器，卻沒有人把它加進這張表，所以「搬完了」
+# 一直少了第三件事——跑起來、備份跟著、**監控知道**。注意這一格擋得住的是「agent 被
+# 移出 domain 或進程沒了」；擋不住 09-10 那次真正的故障（進程活著、3001 通、MTProto
+# 已死 45 小時）。那個只有 ROS 自己的傳輸探測看得到，而它的自我修復當時是壞的。
 UID_NUM=$(id -u)
 LOCAL_AGENT_COOLDOWN_FILE="/tmp/watchdog-local-agent-cooldown"
 LOCAL_RECOVERED=()
 for entry in \
   "com.intelligence-journal.dev 3000" \
+  "com.relationship-os.local 3001" \
   "com.voice-trainer.dev 3005" \
   "com.warehouse-scanner.dev 3008"; do
   label="${entry%% *}"; port="${entry##* }"
