@@ -28,7 +28,7 @@ Uses Syncthing heartbeat file to distinguish machine-offline vs tunnel-only fail
 down when you need it most. SSH manually instead.
 
 - Script: `~/watchdog.sh`
-- Log: `/tmp/atung-watchdog.log`
+- Log: `~/Library/Logs/atung-watchdog.log`
 - LaunchAgent: `com.atung.watchdog`
 - Heartbeat file: `~/CloudSync/ai-project-manager/data/heartbeat.json` (written by chusMBp every 5 min)
 
@@ -36,7 +36,7 @@ down when you need it most. SSH manually instead.
 ```bash
 launchctl load ~/Library/LaunchAgents/com.atung.watchdog.plist
 launchctl start com.atung.watchdog
-cat /tmp/atung-watchdog.log
+cat ~/Library/Logs/atung-watchdog.log
 ```
 
 ---
@@ -148,7 +148,7 @@ ssh chusMBp "for svc in '3000:/health' '3001:/' '3003:/health' '3004:/pm/api/sta
 curl -s http://localhost:8384/rest/system/ping -H "X-API-Key: $SYNCTHING_KEY"
 
 # Watchdog last run
-cat /tmp/atung-watchdog.log | tail -5
+cat ~/Library/Logs/atung-watchdog.log | tail -5
 ```
 
 ---

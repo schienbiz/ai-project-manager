@@ -15,9 +15,9 @@
   <key>StartInterval</key>
   <integer>300</integer>
   <key>StandardOutPath</key>
-  <string>/tmp/atung-watchdog.log</string>
+  <string>__HOME__/Library/Logs/atung-watchdog.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/atung-watchdog.err</string>
+  <string>__HOME__/Library/Logs/atung-watchdog.err</string>
   <key>RunAtLoad</key>
   <true/>
 </dict>

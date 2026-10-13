@@ -113,7 +113,7 @@ Fix: Migrate to a provider with no compute quota (Supabase free tier has none). 
 
 Log paths:
 - chusMBp watchdog: `/tmp/watchdog.log`
-- ATung watchdog: `/tmp/atung-watchdog.log`
+- ATung watchdog: `~/Library/Logs/atung-watchdog.log`
 - bore tunnel: `/tmp/bore-ssh-output.log`
 
 ---
